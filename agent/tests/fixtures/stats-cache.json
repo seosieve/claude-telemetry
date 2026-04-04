@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "lastComputedDate": "2026-04-01",
+  "totalSessions": 42,
+  "totalMessages": 1500,
+  "longestSessionMessages": 350,
+  "longestSessionDurationMs": 7200000,
+  "firstSessionDate": "2026-01-01T00:00:00Z",
+  "dailyActivity": [
+    {
+      "date": "2026-04-01",
+      "messageCount": 200,
+      "sessionCount": 3,
+      "toolCallCount": 85
+    },
+    {
+      "date": "2026-03-31",
+      "messageCount": 150,
+      "sessionCount": 2,
+      "toolCallCount": 60
+    }
+  ],
+  "hourCounts": {
+    "0": 5,
+    "1": 2,
+    "9": 45,
+    "10": 60,
+    "14": 80,
+    "15": 75,
+    "22": 20,
+    "23": 10
+  },
+  "dailyModelTokens": [
+    {
+      "date": "2026-04-01",
+      "models": {
+        "claude-opus-4-6": {"input": 5000, "output": 20000},
+        "claude-sonnet-4-6": {"input": 3000, "output": 15000}
+      }
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "projects": {
+    "C--Users-RyanS-Documents-my-project": [
+      {
+        "date": "2026-04-01",
+        "inputTokens": 1262,
+        "outputTokens": 24132,
+        "cacheCreationTokens": 980599,
+        "cacheReadTokens": 11870773,
+        "totalTokens": 12876766,
+        "totalCost": 8.8515,
+        "modelsUsed": ["claude-opus-4-6", "claude-sonnet-4-6"],
+        "modelBreakdowns": [
+          {
+            "modelName": "claude-sonnet-4-6",
+            "inputTokens": 1235,
+            "outputTokens": 23586,
+            "cacheCreationTokens": 530439,
+            "cacheReadTokens": 11288850,
+            "cost": 5.7333
+          },
+          {
+            "modelName": "claude-opus-4-6",
+            "inputTokens": 27,
+            "outputTokens": 546,
+            "cacheCreationTokens": 450160,
+            "cacheReadTokens": 581923,
+            "cost": 3.1182
+          }
+        ]
+      },
+      {
+        "date": "2026-04-02",
+        "inputTokens": 500,
+        "outputTokens": 1000,
+        "cacheCreationTokens": 10000,
+        "cacheReadTokens": 50000,
+        "totalTokens": 61500,
+        "totalCost": 0.5,
+        "modelsUsed": ["claude-sonnet-4-6"],
+        "modelBreakdowns": [
+          {
+            "modelName": "claude-sonnet-4-6",
+            "inputTokens": 500,
+            "outputTokens": 1000,
+            "cacheCreationTokens": 10000,
+            "cacheReadTokens": 50000,
+            "cost": 0.5
+          }
+        ]
+      }
+    ],
+    "C--Users-RyanS--paperclip-instances-default-workspaces-abc123": [
+      {
+        "date": "2026-04-01",
+        "inputTokens": 100,
+        "outputTokens": 200,
+        "cacheCreationTokens": 5000,
+        "cacheReadTokens": 30000,
+        "totalTokens": 35300,
+        "totalCost": 0.25,
+        "modelsUsed": ["claude-opus-4-6"],
+        "modelBreakdowns": [
+          {
+            "modelName": "claude-opus-4-6",
+            "inputTokens": 100,
+            "outputTokens": 200,
+            "cacheCreationTokens": 5000,
+            "cacheReadTokens": 30000,
+            "cost": 0.25
+          }
+        ]
+      }
+    ]
+  },
+  "totals": {
+    "inputTokens": 1862,
+    "outputTokens": 25332,
+    "cacheCreationTokens": 985599,
+    "cacheReadTokens": 11900773,
+    "totalCost": 9.6015,
+    "totalTokens": 12913566
+  }
+}

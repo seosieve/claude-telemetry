@@ -1,0 +1,3 @@
+{"sessionId": "abc123", "project": "my-project", "startedAt": "2026-04-01T10:00:00Z"}
+{"sessionId": "def456", "project": "other-project", "startedAt": "2026-04-01T14:00:00Z"}
+{"sessionId": "ghi789", "project": "my-project", "startedAt": "2026-04-02T09:00:00Z"}
