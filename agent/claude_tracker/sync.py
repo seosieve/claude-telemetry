@@ -107,6 +107,14 @@ def sync_sessions(
             "last_activity_at": record.last_activity_at,
         })
 
+    # Deduplicate by (machine_id, session_id) keeping highest cost
+    seen: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (row["machine_id"], row["session_id"])
+        if key not in seen or row.get("cost_usd", 0) > seen[key].get("cost_usd", 0):
+            seen[key] = row
+    rows = list(seen.values())
+
     if rows:
         try:
             client.table("sessions").upsert(
