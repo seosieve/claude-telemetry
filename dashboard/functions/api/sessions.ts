@@ -9,17 +9,20 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const project = url.searchParams.get("project");
   const model = url.searchParams.get("model");
   const is_subagent = url.searchParams.get("is_subagent");
-  const page = parseInt(url.searchParams.get("page") || "1", 10);
-  const per_page = parseInt(url.searchParams.get("per_page") || "20", 10);
-  const sort = url.searchParams.get("sort") || "cost_usd";
-  const order = url.searchParams.get("order") || "desc";
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
+  const per_page = Math.min(100, Math.max(1, parseInt(url.searchParams.get("per_page") || "20", 10) || 20));
+  const ALLOWED_SORT = ["cost_usd", "total_tokens", "last_activity_at", "input_tokens", "output_tokens"];
+  const sort = ALLOWED_SORT.includes(url.searchParams.get("sort") || "") ? url.searchParams.get("sort")! : "cost_usd";
+  const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
 
   const offset = (page - 1) * per_page;
 
+  // Sanitize filter values — only allow UUID format for machine_id
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const filters: string[] = [];
-  if (machine_id) filters.push(`machine_id=eq.${machine_id}`);
-  if (project) filters.push(`project=eq.${project}`);
-  if (model) filters.push(`models=cs.{${model}}`);
+  if (machine_id && uuidRe.test(machine_id)) filters.push(`machine_id=eq.${machine_id}`);
+  if (project) filters.push(`project=eq.${encodeURIComponent(project)}`);
+  if (model) filters.push(`models=cs.{${encodeURIComponent(model)}}`);
   if (is_subagent === "true") filters.push("is_subagent=eq.true");
   if (is_subagent === "false") filters.push("is_subagent=eq.false");
 

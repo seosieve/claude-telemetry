@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useUsageData } from "../hooks/useUsageData";
+import { rangeToDate } from "../lib/dateUtils";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import {
   AreaChart,
@@ -11,19 +12,6 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
-
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-function rangeToDate(r: string) {
-  const days = r === "7d" ? 7 : r === "90d" ? 90 : 30;
-  return { start: daysAgo(days), end: today() };
-}
 
 export function Models() {
   const [range, setRange] = useState("30d");
@@ -122,14 +110,14 @@ export function Models() {
         <h3 className="mb-4 text-sm font-medium">Model Mix Over Time</h3>
         <ResponsiveContainer width="100%" height={300}>
           <AreaChart data={mixData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: "#64748b" }}
+              tick={{ fontSize: 10, fill: "#94a3b8" }}
               tickFormatter={(v: string) => v.slice(5)}
             />
             <YAxis
-              tick={{ fontSize: 10, fill: "#64748b" }}
+              tick={{ fontSize: 10, fill: "#94a3b8" }}
               tickFormatter={(v: number) => `${v}%`}
               domain={[0, 100]}
             />
@@ -137,7 +125,7 @@ export function Models() {
               formatter={(v: number) => [`${v.toFixed(1)}%`, ""]}
               contentStyle={{
                 backgroundColor: "#0f172a",
-                border: "1px solid rgba(255,255,255,0.1)",
+                border: "1px solid rgb(51,65,85)",
                 borderRadius: 8,
                 fontSize: 12,
               }}

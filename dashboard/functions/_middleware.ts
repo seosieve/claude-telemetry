@@ -11,7 +11,7 @@ const PUBLIC_PATHS = [
 ];
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
+  return PUBLIC_PATHS.includes(pathname);
 }
 
 export const onRequest: PagesFunction<Env> = async (context) => {

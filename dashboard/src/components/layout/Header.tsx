@@ -16,6 +16,7 @@ export function Header({ title }: HeaderProps) {
         <select
           value={machineId || ""}
           onChange={(e) => setMachineId(e.target.value || undefined)}
+          aria-label="Filter by machine"
           className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-xs text-slate-300 outline-none focus:border-sky-500/50"
         >
           <option value="">All Machines</option>
@@ -30,6 +31,7 @@ export function Header({ title }: HeaderProps) {
             <span className="text-xs text-slate-500">{user.email}</span>
             <button
               onClick={logout}
+              aria-label="Logout"
               className="rounded-lg border border-white/[0.06] px-2 py-1 text-xs text-slate-400 hover:bg-white/[0.04] hover:text-white"
             >
               Logout

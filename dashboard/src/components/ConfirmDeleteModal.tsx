@@ -19,6 +19,15 @@ export function ConfirmDeleteModal({
     if (isOpen) setConfirmText("");
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [isOpen, onCancel]);
+
   if (!isOpen) return null;
 
   const canConfirm = confirmText === machineName;

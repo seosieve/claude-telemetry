@@ -1,14 +1,7 @@
 import { useMemo } from "react";
 import { useUsageData } from "../hooks/useUsageData";
-
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+import { useAlertThresholds } from "../hooks/useAlertThresholds";
+import { daysAgo, today } from "../lib/dateUtils";
 
 interface InsightCardProps {
   icon: string;
@@ -43,8 +36,19 @@ export function Insights() {
   );
   const { summary, projects, machines, weeklyRates, loading } =
     useUsageData(dateRange14);
+  const thresholdAlerts = useAlertThresholds(summary);
 
   const insights: InsightCardProps[] = [];
+
+  // Threshold alerts (from Settings)
+  for (const alert of thresholdAlerts) {
+    insights.push({
+      icon: "\u26A0\uFE0F",
+      title: alert.type === "daily" ? "Daily Cost Alert" : "Weekly Cost Alert",
+      text: alert.message,
+      color: "rose",
+    });
+  }
 
   // Rate limit estimator
   const totalCost14 = summary.reduce((s, r) => s + r.total_cost, 0);

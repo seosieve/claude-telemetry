@@ -1,6 +1,7 @@
 interface SidebarProps {
   activePage: string;
   onNavigate: (page: string) => void;
+  alertCount?: number;
 }
 
 const NAV_ITEMS = [
@@ -15,7 +16,7 @@ const NAV_ITEMS = [
   { id: "settings", label: "Settings" },
 ];
 
-export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, alertCount = 0 }: SidebarProps) {
   return (
     <aside className="hidden w-56 flex-shrink-0 border-r border-white/[0.06] bg-slate-950 lg:flex lg:flex-col">
       <div className="flex h-14 items-center gap-2 border-b border-white/[0.06] px-4">
@@ -29,13 +30,18 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
           <button
             key={item.id}
             onClick={() => onNavigate(item.id)}
-            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
+            className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
               activePage === item.id
                 ? "bg-white/[0.06] text-white"
                 : "text-slate-400 hover:bg-white/[0.03] hover:text-slate-200"
             }`}
           >
             {item.label}
+            {item.id === "insights" && alertCount > 0 && (
+              <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
+                {alertCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>

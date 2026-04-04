@@ -1,12 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchSessions, type PaginatedSessions, type SessionRow } from "../lib/api";
 import { useMachineFilter } from "../hooks/useMachineFilter";
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
+import { formatTokens } from "../lib/dateUtils";
 
 function ModelBadge({ model }: { model: string }) {
   const name = model.split("-").pop() || model;
@@ -23,7 +18,7 @@ function ModelBadge({ model }: { model: string }) {
 }
 
 export function Sessions() {
-  const { machineId } = useMachineFilter();
+  const { machineId, setMachineId, machines } = useMachineFilter();
   const [data, setData] = useState<SessionRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -33,9 +28,31 @@ export function Sessions() {
   const [projectFilter, setProjectFilter] = useState("");
   const [subagentFilter, setSubagentFilter] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestVersion = useRef(0);
+
+  // Machine name lookup map
+  const machineNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of machines) {
+      map.set(m.id, m.name);
+    }
+    return map;
+  }, [machines]);
+
+  // Reset page when filters change
+  const prevMachineId = useRef(machineId);
+  useEffect(() => {
+    if (prevMachineId.current !== machineId) {
+      setPage(1);
+      prevMachineId.current = machineId;
+    }
+  }, [machineId]);
 
   useEffect(() => {
+    const version = ++requestVersion.current;
     setLoading(true);
+    setError(null);
     fetchSessions({
       machineId,
       project: projectFilter || undefined,
@@ -46,11 +63,17 @@ export function Sessions() {
       order,
     })
       .then((result: PaginatedSessions) => {
+        if (version !== requestVersion.current) return;
         setData(result.data);
         setTotal(result.total);
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (version !== requestVersion.current) return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (version === requestVersion.current) setLoading(false);
+      });
   }, [machineId, page, perPage, sort, order, projectFilter, subagentFilter]);
 
   const totalPages = Math.ceil(total / perPage);
@@ -79,9 +102,21 @@ export function Sessions() {
         <h2 className="text-xl font-semibold">Sessions</h2>
         <div className="flex items-center gap-2">
           <select
+            value={machineId || ""}
+            onChange={(e) => { setMachineId(e.target.value || undefined); setPage(1); }}
+            aria-label="Filter by machine"
+            className="rounded-lg border border-white/[0.06] bg-slate-800 px-2 py-1 text-xs text-white outline-none"
+          >
+            <option value="">All Machines</option>
+            {machines.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+          <select
             value={projectFilter}
             onChange={(e) => { setProjectFilter(e.target.value); setPage(1); }}
-            className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-xs text-slate-300 outline-none"
+            aria-label="Filter by project"
+            className="rounded-lg border border-white/[0.06] bg-slate-800 px-2 py-1 text-xs text-white outline-none"
           >
             <option value="">All Projects</option>
             {projects.map((p) => (
@@ -91,7 +126,8 @@ export function Sessions() {
           <select
             value={subagentFilter || ""}
             onChange={(e) => { setSubagentFilter(e.target.value || undefined); setPage(1); }}
-            className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-xs text-slate-300 outline-none"
+            aria-label="Filter by type"
+            className="rounded-lg border border-white/[0.06] bg-slate-800 px-2 py-1 text-xs text-white outline-none"
           >
             <option value="">All Types</option>
             <option value="false">Regular</option>
@@ -107,6 +143,12 @@ export function Sessions() {
         </div>
       )}
 
+      {error && (
+        <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3">
+          <p className="text-xs text-rose-400">Failed to load sessions: {error}</p>
+        </div>
+      )}
+
       {/* Sessions table */}
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
         <div className="overflow-x-auto">
@@ -114,6 +156,7 @@ export function Sessions() {
             <thead>
               <tr className="border-b border-white/[0.06] text-slate-500">
                 <th className="px-3 py-2 text-left font-medium">Project</th>
+                <th className="px-3 py-2 text-left font-medium">Machine</th>
                 <th className="px-3 py-2 text-left font-medium">Models</th>
                 <th
                   className="px-3 py-2 text-right font-medium cursor-pointer hover:text-white"
@@ -152,6 +195,9 @@ export function Sessions() {
                   <td className="px-3 py-2 font-medium max-w-[200px] truncate">
                     {s.project}
                   </td>
+                  <td className="px-3 py-2 text-slate-400 max-w-[120px] truncate">
+                    {machineNameMap.get(s.machine_id) || s.machine_id.slice(0, 8)}
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex gap-1 flex-wrap">
                       {s.models.map((m) => (
@@ -179,7 +225,7 @@ export function Sessions() {
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-slate-500">
-                    {s.last_activity_at?.slice(0, 10) || "—"}
+                    {s.last_activity_at?.slice(0, 10) || "\u2014"}
                   </td>
                 </tr>
               ))}

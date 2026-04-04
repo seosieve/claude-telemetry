@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from "react";
 import { useUsageData } from "../hooks/useUsageData";
 import { deleteMachine } from "../lib/api";
+import { rangeToDate, formatTokens } from "../lib/dateUtils";
+import { getStatusDisplay } from "../lib/machineStatus";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { ConfirmDeleteModal } from "../components/ConfirmDeleteModal";
 import {
@@ -13,33 +15,6 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-function rangeToDate(r: string) {
-  const days = r === "7d" ? 7 : r === "90d" ? 90 : 30;
-  return { start: daysAgo(days), end: today() };
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
-function syncStatusBadge(lastSync: string | null) {
-  if (!lastSync) return { color: "bg-slate-600", label: "Never" };
-  const diffMin = (Date.now() - new Date(lastSync).getTime()) / 60000;
-  if (diffMin < 30) return { color: "bg-emerald-400", label: "Active" };
-  if (diffMin < 120) return { color: "bg-amber-400", label: "Idle" };
-  return { color: "bg-rose-400", label: "Offline" };
-}
 
 export function Machines() {
   const [range, setRange] = useState("30d");
@@ -99,10 +74,10 @@ export function Machines() {
               layout="vertical"
               margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
               <XAxis
                 type="number"
-                tick={{ fontSize: 10, fill: "#64748b" }}
+                tick={{ fontSize: 10, fill: "#94a3b8" }}
                 tickFormatter={(v: number) => `$${v}`}
               />
               <YAxis
@@ -115,7 +90,7 @@ export function Machines() {
                 formatter={(value: number) => [`$${value.toFixed(2)}`, "Cost"]}
                 contentStyle={{
                   backgroundColor: "#0f172a",
-                  border: "1px solid rgba(255,255,255,0.1)",
+                  border: "1px solid rgb(51,65,85)",
                   borderRadius: 8,
                   fontSize: 12,
                 }}
@@ -129,7 +104,7 @@ export function Machines() {
       {/* Machine cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {machines.map((m) => {
-          const badge = syncStatusBadge(m.last_activity);
+          const badge = getStatusDisplay(m.last_activity);
           const pct = totalCost > 0 ? ((m.total_cost / totalCost) * 100).toFixed(0) : "0";
           return (
             <div

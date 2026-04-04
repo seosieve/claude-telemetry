@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useUsageData } from "../hooks/useUsageData";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { fetchStatsExtra } from "../lib/api";
+import { rangeToDate } from "../lib/dateUtils";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import {
   AreaChart,
@@ -14,19 +15,6 @@ import {
   Legend,
 } from "recharts";
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-function rangeToDate(r: string) {
-  const days = r === "7d" ? 7 : r === "90d" ? 90 : 30;
-  return { start: daysAgo(days), end: today() };
-}
-
 export function Daily() {
   const [range, setRange] = useState("30d");
   const dateRange = useMemo(() => rangeToDate(range), [range]);
@@ -35,7 +23,10 @@ export function Daily() {
 
   const [hourCounts, setHourCounts] = useState<Record<string, number> | null>(null);
 
+  const [statsError, setStatsError] = useState<string | null>(null);
+
   useEffect(() => {
+    setStatsError(null);
     fetchStatsExtra(machineId)
       .then((data) => {
         const arr = data as Array<{ hour_counts?: Record<string, number> }>;
@@ -43,7 +34,9 @@ export function Daily() {
           setHourCounts(arr[0].hour_counts);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        setStatsError(err.message);
+      });
   }, [machineId]);
 
   // Top 10 most expensive days
@@ -81,20 +74,20 @@ export function Daily() {
         <h3 className="mb-4 text-sm font-medium">Daily Cost by Model</h3>
         <ResponsiveContainer width="100%" height={300}>
           <AreaChart data={summary} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: "#64748b" }}
+              tick={{ fontSize: 10, fill: "#94a3b8" }}
               tickFormatter={(v: string) => v.slice(5)}
             />
             <YAxis
-              tick={{ fontSize: 10, fill: "#64748b" }}
+              tick={{ fontSize: 10, fill: "#94a3b8" }}
               tickFormatter={(v: number) => `$${v}`}
             />
             <Tooltip
               contentStyle={{
                 backgroundColor: "#0f172a",
-                border: "1px solid rgba(255,255,255,0.1)",
+                border: "1px solid rgb(51,65,85)",
                 borderRadius: 8,
                 fontSize: 12,
               }}
@@ -189,6 +182,8 @@ export function Daily() {
                 );
               })}
             </div>
+          ) : statsError ? (
+            <p className="text-xs text-rose-400">Failed to load: {statsError}</p>
           ) : (
             <p className="text-xs text-slate-600">
               No hour data available. Stats cache needed.

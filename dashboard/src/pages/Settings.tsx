@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchMachines, deleteMachine, getExportUrl } from "../lib/api";
+import { getStatusDisplay } from "../lib/machineStatus";
 import { ConfirmDeleteModal } from "../components/ConfirmDeleteModal";
 
 interface Machine {
@@ -10,14 +11,6 @@ interface Machine {
   last_sync_at: string | null;
   is_active: boolean;
   created_at: string;
-}
-
-function syncStatusBadge(lastSync: string | null) {
-  if (!lastSync) return { color: "bg-slate-600", label: "Never" };
-  const diffMin = (Date.now() - new Date(lastSync).getTime()) / 60000;
-  if (diffMin < 30) return { color: "bg-emerald-400", label: "Active" };
-  if (diffMin < 120) return { color: "bg-amber-400", label: "Idle" };
-  return { color: "bg-rose-400", label: "Offline" };
 }
 
 export function Settings() {
@@ -83,7 +76,7 @@ export function Settings() {
               </thead>
               <tbody>
                 {machines.map((m) => {
-                  const badge = syncStatusBadge(m.last_sync_at);
+                  const badge = getStatusDisplay(m.last_sync_at);
                   return (
                     <tr
                       key={m.id}

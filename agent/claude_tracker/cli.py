@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import copy
 import json
-import os
 import platform
 import shutil
 import subprocess
@@ -82,7 +82,7 @@ def setup(
         ).stdout.strip()
         ccost_installed = True
         click.echo(f"  ccost:   {ccost_ver or 'installed'} (rate limit tracking enabled)")
-    except (FileNotFoundError, Exception):
+    except FileNotFoundError:
         ccost_installed = False
         ccost_path = None
         click.echo("  ccost:   not found (rate limit tracking disabled)")
@@ -92,16 +92,26 @@ def setup(
     click.echo(f"  Claude dir: {claude_dir} ({'exists' if claude_dir.exists() else 'NOT FOUND'})")
     click.echo()
 
-    # Load existing or create new config
-    if CONFIG_FILE.exists() and not non_interactive:
-        config = json.loads(CONFIG_FILE.read_text())
-        click.echo(f"Existing config found. Machine ID: {config.get('machine_id')}")
-        if not click.confirm("Overwrite existing config?", default=False):
-            click.echo("Setup cancelled.")
-            return
-    config = DEFAULT_CONFIG.copy()
-    config["last_sync"] = DEFAULT_CONFIG["last_sync"].copy()
-    config["features"] = DEFAULT_CONFIG["features"].copy()
+    # Load existing config or start fresh
+    existing_config: dict | None = None
+    if CONFIG_FILE.exists():
+        existing_config = json.loads(CONFIG_FILE.read_text())
+        existing_id = existing_config.get("machine_id")
+        click.echo(f"Existing config found. Machine ID: {existing_id}")
+        if not non_interactive:
+            if not click.confirm("Update existing config?", default=True):
+                click.echo("Setup cancelled.")
+                return
+
+    config = copy.deepcopy(DEFAULT_CONFIG)
+
+    # Preserve existing machine_id and api_key when re-running setup
+    if existing_config and existing_config.get("machine_id"):
+        config["machine_id"] = existing_config["machine_id"]
+        config["api_key"] = existing_config.get("api_key") or generate_api_key()
+        # Preserve last_sync timestamps
+        if existing_config.get("last_sync"):
+            config["last_sync"] = existing_config["last_sync"]
 
     if non_interactive:
         if not machine_name or not supabase_url or not supabase_key:
@@ -110,15 +120,30 @@ def setup(
         config["machine_name"] = machine_name
         config["supabase_url"] = supabase_url
         config["supabase_service_key"] = supabase_key
-        config["machine_id"] = machine_id or generate_machine_id()
-        config["api_key"] = api_key or generate_api_key()
+        # CLI flags override preserved values
+        if machine_id:
+            config["machine_id"] = machine_id
+        elif not config.get("machine_id"):
+            config["machine_id"] = generate_machine_id()
+        if api_key:
+            config["api_key"] = api_key
+        elif not config.get("api_key"):
+            config["api_key"] = generate_api_key()
     else:
-        default_name = platform.node()
+        default_name = existing_config.get("machine_name") if existing_config else platform.node()
         config["machine_name"] = click.prompt("Machine name", default=default_name)
-        config["supabase_url"] = click.prompt("Supabase URL (https://xxxxx.supabase.co)")
-        config["supabase_service_key"] = click.prompt("Supabase service_role key")
-        config["machine_id"] = generate_machine_id()
-        config["api_key"] = generate_api_key()
+        config["supabase_url"] = click.prompt(
+            "Supabase URL",
+            default=existing_config.get("supabase_url") if existing_config else None,
+        )
+        config["supabase_service_key"] = click.prompt(
+            "Supabase service_role key",
+            default=existing_config.get("supabase_service_key") if existing_config else None,
+        )
+        if not config.get("machine_id"):
+            config["machine_id"] = generate_machine_id()
+        if not config.get("api_key"):
+            config["api_key"] = generate_api_key()
 
     config["claude_data_dir"] = str(claude_dir)
     config["features"]["ccost_installed"] = ccost_installed
@@ -145,7 +170,7 @@ def setup(
         click.echo("You can retry with 'claude-tracker sync' after fixing the connection.")
 
     click.echo(f"\nMachine ID: {config['machine_id']}")
-    click.echo(f"API Key:    {config['api_key']}")
+    click.echo(f"API Key:    {config['api_key'][:10]}...{config['api_key'][-4:]}")
     click.echo("\nSetup complete! Run 'claude-tracker sync' to start syncing.")
 
 
@@ -336,9 +361,8 @@ def uninstall(yes: bool) -> None:
         pass  # Service may not be installed
 
     # Remove config directory
-    import shutil as _shutil
     if CONFIG_DIR.exists():
-        _shutil.rmtree(CONFIG_DIR)
+        shutil.rmtree(CONFIG_DIR)
         click.echo(f"Removed {CONFIG_DIR}")
     else:
         click.echo(f"Config directory not found: {CONFIG_DIR}")

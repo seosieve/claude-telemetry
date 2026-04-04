@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useUsageData } from "../hooks/useUsageData";
+import { rangeToDate } from "../lib/dateUtils";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { MetricCard } from "../components/cards/MetricCard";
 import {
@@ -16,23 +17,35 @@ import {
   Legend,
 } from "recharts";
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-function rangeToDate(r: string) {
-  const days = r === "7d" ? 7 : r === "90d" ? 90 : 30;
-  return { start: daysAgo(days), end: today() };
+function CustomPieTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; payload: { fill: string } }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const entry = payload[0];
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className="inline-block h-2 w-2 rounded-full"
+          style={{ backgroundColor: entry.payload.fill }}
+        />
+        <span className="font-medium text-white">{entry.name}</span>
+        <span className="ml-2 font-mono text-white">
+          ${entry.value.toFixed(2)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 const PIE_COLORS = [
   "#f43f5e", "#38bdf8", "#34d399", "#8b5cf6",
   "#f59e0b", "#ec4899", "#06b6d4", "#84cc16",
-  "#64748b",
+  "#94a3b8",
 ];
 
 export function Projects() {
@@ -103,10 +116,10 @@ export function Projects() {
               layout="vertical"
               margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
               <XAxis
                 type="number"
-                tick={{ fontSize: 10, fill: "#64748b" }}
+                tick={{ fontSize: 10, fill: "#94a3b8" }}
                 tickFormatter={(v: number) => `$${v}`}
               />
               <YAxis
@@ -120,11 +133,13 @@ export function Projects() {
               />
               <Tooltip
                 formatter={(value: number) => [`$${value.toFixed(2)}`, "Cost"]}
+                labelStyle={{ color: "#cbd5e1", fontSize: 11 }}
                 contentStyle={{
-                  backgroundColor: "#0f172a",
-                  border: "1px solid rgba(255,255,255,0.1)",
+                  backgroundColor: "rgb(15,23,42)",
+                  border: "1px solid rgb(51,65,85)",
                   borderRadius: 8,
                   fontSize: 12,
+                  color: "white",
                 }}
               />
               <Bar dataKey="total_cost" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
@@ -150,15 +165,7 @@ export function Projects() {
                   <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip
-                formatter={(value: number) => [`$${value.toFixed(2)}`, ""]}
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  fontSize: 12,
-                }}
-              />
+              <Tooltip content={<CustomPieTooltip />} />
               <Legend
                 wrapperStyle={{ fontSize: 10 }}
                 iconType="circle"

@@ -26,21 +26,21 @@ function CustomTooltip({
   if (!active || !payload?.length) return null;
   const total = payload.reduce((s, p) => s + p.value, 0);
   return (
-    <div className="rounded-lg border border-white/[0.1] bg-slate-900 p-3 shadow-xl">
-      <p className="mb-1 text-xs text-slate-400">{label}</p>
+    <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+      <p className="mb-1 text-xs text-slate-300">{label}</p>
       {payload.map((p) => (
         <div key={p.name} className="flex items-center gap-2 text-xs">
           <span
             className="inline-block h-2 w-2 rounded-full"
             style={{ backgroundColor: p.color }}
           />
-          <span className="text-slate-300">{p.name}</span>
-          <span className="ml-auto font-mono font-medium">
+          <span className="text-white">{p.name}</span>
+          <span className="ml-auto font-mono font-medium text-white">
             ${p.value.toFixed(2)}
           </span>
         </div>
       ))}
-      <div className="mt-1 border-t border-white/[0.06] pt-1 text-xs font-medium">
+      <div className="mt-1 border-t border-slate-700 pt-1 text-xs font-medium text-white">
         Total: <span className="font-mono">${total.toFixed(2)}</span>
       </div>
     </div>
@@ -53,21 +53,21 @@ export function DailyCostChart({ data }: DailyCostChartProps) {
       <h3 className="mb-4 text-sm font-medium">Daily Cost</h3>
       <ResponsiveContainer width="100%" height={300}>
         <BarChart data={data} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: "#64748b" }}
+            tick={{ fontSize: 10, fill: "#94a3b8" }}
             tickFormatter={(v: string) => v.slice(5)}
-            axisLine={{ stroke: "rgba(255,255,255,0.06)" }}
+            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: "#64748b" }}
+            tick={{ fontSize: 10, fill: "#94a3b8" }}
             tickFormatter={(v: number) => `$${v}`}
-            axisLine={{ stroke: "rgba(255,255,255,0.06)" }}
+            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
           />
           <Tooltip content={<CustomTooltip />} />
           <Legend
-            wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+            wrapperStyle={{ fontSize: 11, paddingTop: 8, color: "#cbd5e1" }}
             iconType="circle"
             iconSize={8}
           />

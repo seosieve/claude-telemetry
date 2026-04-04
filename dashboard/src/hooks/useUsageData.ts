@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   getUsageSummary,
   getProjectCosts,
@@ -33,9 +33,10 @@ export function useUsageData(dateRange: DateRange): UsageData {
   const [machines, setMachines] = useState<MachineSummaryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestVersion = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
+    const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
 
@@ -46,23 +47,19 @@ export function useUsageData(dateRange: DateRange): UsageData {
       getMachineSummary(dateRange.start, dateRange.end),
     ])
       .then(([s, p, w, m]) => {
-        if (cancelled) return;
+        if (version !== requestVersion.current) return;
         setSummary(s);
         setProjects(p);
         setWeeklyRates(w);
         setMachines(m);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (version !== requestVersion.current) return;
         setError(err.message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (version === requestVersion.current) setLoading(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [dateRange.start, dateRange.end, machineId]);
 
   return { summary, projects, weeklyRates, machines, loading, error };

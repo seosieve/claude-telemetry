@@ -1,5 +1,6 @@
+import { TOKEN_KEY } from "./constants";
+
 const API_BASE = "/api";
-const TOKEN_KEY = "claude_tracker_token";
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem(TOKEN_KEY);

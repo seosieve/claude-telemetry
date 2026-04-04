@@ -30,8 +30,7 @@ const AuthContext = createContext<AuthContextValue>({
   token: null,
 });
 
-const TOKEN_KEY = "claude_tracker_token";
-const REFRESH_KEY = "claude_tracker_refresh";
+import { TOKEN_KEY, REFRESH_KEY } from "../lib/constants";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -82,8 +81,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           localStorage.setItem(REFRESH_KEY, refreshToken);
         }
         validateToken(accessToken).finally(() => {
-          // Clean up the URL
-          window.location.hash = "";
+          // Clean up the URL — replaceState prevents token in browser history
+          window.history.replaceState({}, "", window.location.pathname);
           setIsLoading(false);
         });
         return;

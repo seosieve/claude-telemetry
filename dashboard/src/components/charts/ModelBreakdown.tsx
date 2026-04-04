@@ -12,11 +12,36 @@ interface ModelBreakdownProps {
   data: UsageSummaryRow[];
 }
 
-const COLORS = {
+const COLORS: Record<string, string> = {
   Opus: "#f43f5e",
   Sonnet: "#38bdf8",
   Haiku: "#34d399",
 };
+
+function CustomPieTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; payload: { color: string } }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const entry = payload[0];
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className="inline-block h-2 w-2 rounded-full"
+          style={{ backgroundColor: entry.payload.color }}
+        />
+        <span className="font-medium text-white">{entry.name}</span>
+        <span className="ml-2 font-mono text-white">
+          ${entry.value.toFixed(2)}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export function ModelBreakdown({ data }: ModelBreakdownProps) {
   const totals = data.reduce(
@@ -54,17 +79,9 @@ export function ModelBreakdown({ data }: ModelBreakdownProps) {
               <Cell key={entry.name} fill={entry.color} />
             ))}
           </Pie>
-          <Tooltip
-            formatter={(value: number) => [`$${value.toFixed(2)}`, ""]}
-            contentStyle={{
-              backgroundColor: "#0f172a",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-          />
+          <Tooltip content={<CustomPieTooltip />} />
           <Legend
-            wrapperStyle={{ fontSize: 11 }}
+            wrapperStyle={{ fontSize: 11, color: "#cbd5e1" }}
             iconType="circle"
             iconSize={8}
             formatter={(name: string) => {

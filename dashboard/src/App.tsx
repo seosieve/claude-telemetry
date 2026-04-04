@@ -1,6 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { MachineFilterProvider } from "./hooks/useMachineFilter";
+import { useUsageData } from "./hooks/useUsageData";
+import { useAlertThresholds } from "./hooks/useAlertThresholds";
+import { daysAgo, today } from "./lib/dateUtils";
 import { Layout } from "./components/layout/Layout";
 import { Login } from "./pages/Login";
 import { Overview } from "./pages/Overview";
@@ -92,21 +96,34 @@ function AuthenticatedApp() {
 
   return (
     <MachineFilterProvider>
-      <Layout
-        title={PAGE_TITLES[page] || "Overview"}
-        activePage={page}
-        onNavigate={navigate}
-      >
-        <PageRouter page={page} />
-      </Layout>
+      <DashboardShell page={page} onNavigate={navigate} />
     </MachineFilterProvider>
+  );
+}
+
+function DashboardShell({ page, onNavigate }: { page: string; onNavigate: (p: string) => void }) {
+  const dateRange = useMemo(() => ({ start: daysAgo(14), end: today() }), []);
+  const { summary } = useUsageData(dateRange);
+  const alerts = useAlertThresholds(summary);
+
+  return (
+    <Layout
+      title={PAGE_TITLES[page] || "Overview"}
+      activePage={page}
+      onNavigate={onNavigate}
+      alertCount={alerts.length}
+    >
+      <PageRouter page={page} />
+    </Layout>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AuthenticatedApp />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <AuthenticatedApp />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

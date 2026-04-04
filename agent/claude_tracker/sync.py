@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import logging
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +11,8 @@ from supabase import create_client, Client
 
 from .config import load_config, update_last_sync, get_last_sync
 from .models import DailyUsage, SessionUsage, RateLimit, StatsExtra, SyncResult
+
+logger = logging.getLogger("claude-tracker")
 
 
 def _get_client(config: dict[str, Any]) -> Client:
@@ -27,17 +29,18 @@ def sync_daily_usage(
     client: Client,
     force: bool = False,
 ) -> SyncResult:
-    """Upsert daily usage records to Supabase."""
+    """Batch upsert daily usage records to Supabase."""
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
     last_sync = None if force else get_last_sync("daily_usage")
 
+    rows = []
     for record in records:
         if last_sync and record.date <= last_sync[:10]:
             continue
-        row = {
+        rows.append({
             "machine_id": machine_id,
             "date": record.date,
             "project": record.project,
@@ -48,21 +51,22 @@ def sync_daily_usage(
             "cache_read_tokens": record.cache_read_tokens,
             "total_tokens": record.total_tokens,
             "cost_usd": record.cost_usd,
-        }
+        })
+
+    if rows:
         try:
             client.table("daily_usage").upsert(
-                row,
+                rows,
                 on_conflict="machine_id,date,project,model",
             ).execute()
-            upserted += 1
+            upserted = len(rows)
         except Exception as e:
-            errors.append(f"daily_usage {record.date}/{record.project}/{record.model}: {e}")
+            errors.append(f"daily_usage batch: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-    now = _now_iso()
 
     if not errors:
-        update_last_sync("daily_usage", now)
+        update_last_sync("daily_usage", _now_iso())
 
     _log_sync(client, machine_id, "daily_usage", upserted, errors, elapsed)
 
@@ -80,13 +84,14 @@ def sync_sessions(
     client: Client,
     force: bool = False,
 ) -> SyncResult:
-    """Upsert session records to Supabase."""
+    """Batch upsert session records to Supabase."""
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
+    rows = []
     for record in records:
-        row = {
+        rows.append({
             "machine_id": machine_id,
             "session_id": record.session_id,
             "project": record.project,
@@ -100,21 +105,22 @@ def sync_sessions(
             "total_tokens": record.total_tokens,
             "cost_usd": record.cost_usd,
             "last_activity_at": record.last_activity_at,
-        }
+        })
+
+    if rows:
         try:
             client.table("sessions").upsert(
-                row,
+                rows,
                 on_conflict="machine_id,session_id",
             ).execute()
-            upserted += 1
+            upserted = len(rows)
         except Exception as e:
-            errors.append(f"session {record.session_id}: {e}")
+            errors.append(f"sessions batch: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-    now = _now_iso()
 
     if not errors:
-        update_last_sync("sessions", now)
+        update_last_sync("sessions", _now_iso())
 
     _log_sync(client, machine_id, "sessions", upserted, errors, elapsed)
 
@@ -131,34 +137,36 @@ def sync_rate_limits(
     machine_id: str,
     client: Client,
 ) -> SyncResult:
-    """Upsert rate limit records to Supabase."""
+    """Batch upsert rate limit records to Supabase."""
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
+    rows = []
     for record in records:
-        row = {
+        rows.append({
             "machine_id": machine_id,
             "timestamp": record.timestamp,
             "window_5h_percent": record.window_5h_percent,
             "window_1w_percent": record.window_1w_percent,
             "session_cost_usd": record.session_cost_usd,
             "session_duration_seconds": record.session_duration_seconds,
-        }
+        })
+
+    if rows:
         try:
             client.table("rate_limits").upsert(
-                row,
+                rows,
                 on_conflict="machine_id,timestamp",
             ).execute()
-            upserted += 1
+            upserted = len(rows)
         except Exception as e:
-            errors.append(f"rate_limit {record.timestamp}: {e}")
+            errors.append(f"rate_limits batch: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-    now = _now_iso()
 
     if not errors:
-        update_last_sync("rate_limits", now)
+        update_last_sync("rate_limits", _now_iso())
 
     _log_sync(client, machine_id, "rate_limits", upserted, errors, elapsed)
 
@@ -175,7 +183,7 @@ def sync_stats_extra(
     machine_id: str,
     client: Client,
 ) -> SyncResult:
-    """Upsert stats_extra record to Supabase."""
+    """Upsert stats_extra record to Supabase (not insert — prevents duplicates)."""
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
@@ -192,16 +200,18 @@ def sync_stats_extra(
         "model_usage": stats.model_usage,
     }
     try:
-        client.table("stats_extra").insert(row).execute()
+        client.table("stats_extra").upsert(
+            row,
+            on_conflict="machine_id",
+        ).execute()
         upserted = 1
     except Exception as e:
         errors.append(f"stats_extra: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-    now = _now_iso()
 
     if not errors:
-        update_last_sync("stats_extra", now)
+        update_last_sync("stats_extra", _now_iso())
 
     _log_sync(client, machine_id, "stats_extra", upserted, errors, elapsed)
 
@@ -234,5 +244,5 @@ def _log_sync(
         client.table("machines").update({
             "last_sync_at": _now_iso(),
         }).eq("id", machine_id).execute()
-    except Exception:
-        pass  # Best-effort logging
+    except Exception as e:
+        logger.warning("Failed to log sync: %s", e)

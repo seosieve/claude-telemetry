@@ -6,35 +6,7 @@ import { ModelBreakdown } from "../components/charts/ModelBreakdown";
 import { MonthlyCostChart } from "../components/charts/MonthlyCostChart";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { useUsageData } from "../hooks/useUsageData";
-
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function rangeToDate(range: string): { start: string; end: string } {
-  switch (range) {
-    case "7d":
-      return { start: daysAgo(7), end: today() };
-    case "90d":
-      return { start: daysAgo(90), end: today() };
-    case "30d":
-    default:
-      return { start: daysAgo(30), end: today() };
-  }
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
+import { rangeToDate, formatTokens } from "../lib/dateUtils";
 
 export function Overview() {
   const [range, setRange] = useState("30d");
