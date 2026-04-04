@@ -23,8 +23,6 @@ CLI tools like [ccusage](https://github.com/ryoppippi/ccusage) and ccost are sin
 
 The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing/pricing layer and focuses only on multi-PC aggregation and centralized sync.
 
-![Dashboard Overview](docs/screenshot-overview.png)
-
 ## Features
 
 - Multi-PC aggregation with per-machine tracking
