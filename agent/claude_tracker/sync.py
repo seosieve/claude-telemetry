@@ -53,6 +53,14 @@ def sync_daily_usage(
             "cost_usd": record.cost_usd,
         })
 
+    # Deduplicate by (machine_id, date, project, model) keeping highest cost
+    seen: dict[tuple[str, str, str, str], dict] = {}
+    for row in rows:
+        key = (row["machine_id"], row["date"], row["project"], row["model"])
+        if key not in seen or row.get("cost_usd", 0) > seen[key].get("cost_usd", 0):
+            seen[key] = row
+    rows = list(seen.values())
+
     if rows:
         try:
             client.table("daily_usage").upsert(
