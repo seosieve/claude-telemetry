@@ -20,19 +20,23 @@ logger = logging.getLogger("claude-tracker-daemon")
 
 
 def _setup_logging(verbose: bool = False) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     level = logging.DEBUG if verbose else logging.INFO
     fmt = "%(asctime)s [%(levelname)s] %(message)s"
-
-    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    file_handler.setFormatter(logging.Formatter(fmt))
-
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(logging.Formatter(fmt))
-
     logger.setLevel(level)
-    logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter(fmt))
+        logger.addHandler(file_handler)
+    except Exception:
+        pass  # Can't write log file (e.g. pythonw with no permissions)
+
+    # Stream handler only if not running windowless (pythonw)
+    if sys.executable and not sys.executable.endswith("pythonw.exe"):
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(logging.Formatter(fmt))
+        logger.addHandler(stream_handler)
 
 
 def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:

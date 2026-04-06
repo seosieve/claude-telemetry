@@ -60,7 +60,7 @@ export function Insights() {
           });
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.warn("Rate limits unavailable:", e.message); });
   }, [machineId]);
 
   const insights: InsightCardProps[] = [];
@@ -194,7 +194,7 @@ export function Insights() {
   // Model optimization
   const opusCost = summary.reduce((s, r) => s + r.opus_cost, 0);
   const opusPct = totalCost14 > 0 ? (opusCost / totalCost14) * 100 : 0;
-  if (opusPct > 70) {
+  if (opusPct > 70 && activeDays14 > 0) {
     const weeklySavings = (opusCost / activeDays14) * 7 * 0.5 * 0.8;
     insights.push({
       icon: "\uD83D\uDCA1",

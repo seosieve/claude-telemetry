@@ -34,7 +34,7 @@ export function Overview() {
           });
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.warn("Rate limits unavailable:", e.message); });
   }, [machineId]);
 
   const totalCost = summary.reduce((s, r) => s + r.total_cost, 0);

@@ -2,6 +2,18 @@ import { TOKEN_KEY } from "./constants";
 
 const API_BASE = "/api";
 
+// Global auth expiry handler — set by AuthContext
+let _onAuthExpired: (() => void) | null = null;
+export function setOnAuthExpired(fn: () => void) {
+  _onAuthExpired = fn;
+}
+
+function handleUnauthorized(): never {
+  localStorage.removeItem(TOKEN_KEY);
+  if (_onAuthExpired) _onAuthExpired();
+  throw new Error("Session expired");
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem(TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -21,11 +33,7 @@ async function fetchJson<T>(path: string, params?: Record<string, string | undef
 
   const res = await fetch(url, { headers: getAuthHeaders() });
   if (res.status === 401) {
-    // Token expired — clear and redirect to login
-    localStorage.removeItem(TOKEN_KEY);
-    window.location.hash = "";
-    window.location.reload();
-    throw new Error("Session expired");
+    handleUnauthorized();
   }
   if (!res.ok) {
     const body = await res.text();
@@ -41,10 +49,7 @@ async function postJson<T>(path: string, body: Record<string, unknown>): Promise
     body: JSON.stringify(body),
   });
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
-    window.location.hash = "";
-    window.location.reload();
-    throw new Error("Session expired");
+    handleUnauthorized();
   }
   if (!res.ok) {
     const text = await res.text();
@@ -205,10 +210,7 @@ export async function deleteMachine(
     headers: getAuthHeaders(),
   });
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
-    window.location.hash = "";
-    window.location.reload();
-    throw new Error("Session expired");
+    handleUnauthorized();
   }
   if (!res.ok) {
     const text = await res.text();
@@ -276,6 +278,7 @@ export async function updatePreferences(
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(data),
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`API error ${res.status}: ${text}`);
@@ -299,6 +302,7 @@ export async function downloadExport(
   }
   const url = `${API_BASE}/${endpoint}?${searchParams}`;
   const res = await fetch(url, { headers: getAuthHeaders() });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     throw new Error(`Export failed: ${res.status}`);
   }

@@ -31,6 +31,7 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 import { TOKEN_KEY, REFRESH_KEY } from "../lib/constants";
+import { setOnAuthExpired } from "../lib/api";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -77,12 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const refreshToken = params.get("refresh_token");
 
       if (accessToken) {
+        // Clean URL FIRST to prevent reprocessing on reload
+        window.history.replaceState({}, "", window.location.pathname);
         if (refreshToken) {
           localStorage.setItem(REFRESH_KEY, refreshToken);
         }
         validateToken(accessToken).finally(() => {
-          // Clean up the URL — replaceState prevents token in browser history
-          window.history.replaceState({}, "", window.location.pathname);
           setIsLoading(false);
         });
         return;
@@ -133,6 +134,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
   }, []);
+
+  // Register global 401 handler so api.ts can trigger logout
+  useEffect(() => {
+    setOnAuthExpired(() => logout());
+  }, [logout]);
 
   return (
     <AuthContext.Provider

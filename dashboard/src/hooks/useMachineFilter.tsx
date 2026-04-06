@@ -41,7 +41,7 @@ export function MachineFilterProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     fetchMachines()
       .then((data) => setMachines(data as Machine[]))
-      .catch(() => {})
+      .catch((e) => { console.warn("Machine list unavailable:", e.message); })
       .finally(() => setLoading(false));
   }, []);
 

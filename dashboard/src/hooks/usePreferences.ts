@@ -4,6 +4,7 @@ import {
   updatePreferences,
   type UserPreferences,
 } from "../lib/api";
+import { TOKEN_KEY } from "../lib/constants";
 
 const FALLBACK_KEY = "claude_tracker_preferences";
 
@@ -34,8 +35,14 @@ export function usePreferencesProvider() {
   const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_PREFS);
   const [loading, setLoading] = useState(true);
 
-  // Load on mount
+  // Load only when authenticated (token exists)
   useEffect(() => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
     fetchPreferences()
       .then((data) => {
         setPrefs(data);
@@ -51,7 +58,7 @@ export function usePreferencesProvider() {
           if (thresholds.daily !== data.alert_thresholds.daily || thresholds.weekly !== data.alert_thresholds.weekly) {
             updatePreferences({ alert_thresholds: thresholds }).then((updated) => {
               setPrefs(updated);
-            }).catch(() => {});
+            }).catch((e) => { console.warn("Preferences migration failed:", e.message); });
           }
           // Clear localStorage after migration
           localStorage.removeItem("alert_daily_threshold");

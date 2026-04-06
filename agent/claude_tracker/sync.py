@@ -277,6 +277,18 @@ def sync_blocks(
     rows = list(seen.values())
 
     if rows:
+        # Deactivate blocks no longer reported as active by ccusage
+        active_starts = [r["block_start"] for r in rows if r.get("is_active")]
+        try:
+            q = client.table("blocks").update({"is_active": False}).eq(
+                "machine_id", machine_id
+            ).eq("is_active", True)
+            if active_starts:
+                q = q.not_.in_("block_start", active_starts)
+            q.execute()
+        except Exception:
+            pass  # Best-effort deactivation
+
         try:
             client.table("blocks").upsert(
                 rows,

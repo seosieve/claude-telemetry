@@ -33,7 +33,7 @@ export function Settings() {
     setLoading(true);
     fetchMachines(false)
       .then((data) => setMachines(data as Machine[]))
-      .catch(() => {})
+      .catch((e) => { console.warn("Settings fetch failed:", e.message); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -60,7 +60,7 @@ export function Settings() {
     })
       .then((r) => r.json())
       .then((data: { allowed_emails: string[] }) => setAllowedEmails(data.allowed_emails))
-      .catch(() => {});
+      .catch((e) => { console.warn("Settings fetch failed:", e.message); });
   }, []);
 
   const saveThresholds = () => {
@@ -83,7 +83,7 @@ export function Settings() {
         const arr = data as Array<{ project: string }>;
         setProjectNames(arr.map((p) => p.project));
       })
-      .catch(() => {});
+      .catch((e) => { console.warn("Settings fetch failed:", e.message); });
   }, []);
 
   // Sync budgets from preferences

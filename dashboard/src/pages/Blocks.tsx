@@ -58,7 +58,7 @@ export function Blocks() {
       endDate: dateRange.end,
     })
       .then(setBlocks)
-      .catch(() => {})
+      .catch((e) => { console.warn("Blocks fetch failed:", e.message); })
       .finally(() => setLoading(false));
   }, [machineId, dateRange.start, dateRange.end]);
 
