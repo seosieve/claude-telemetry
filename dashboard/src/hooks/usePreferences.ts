@@ -16,6 +16,11 @@ const DEFAULT_PREFS: UserPreferences = {
   alert_thresholds: { daily: 20, weekly: 100 },
   week_start_day: "monday",
   theme: "dark",
+  notifications: {
+    webhook_url: null,
+    webhook_enabled: false,
+    types: { project_budget: true, rate_limit: true },
+  },
   updated_at: "",
 };
 

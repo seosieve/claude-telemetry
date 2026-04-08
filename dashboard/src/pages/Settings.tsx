@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { fetchMachines, deleteMachine, downloadExport, fetchProjectCosts } from "../lib/api";
+import { fetchMachines, deleteMachine, downloadExport, fetchProjectCosts, testWebhook } from "../lib/api";
+import type { NotificationPrefs } from "../lib/api";
 import { getStatusDisplay } from "../lib/machineStatus";
 import { usePreferences } from "../hooks/usePreferences";
 import { daysAgo, today } from "../lib/dateUtils";
@@ -13,6 +14,109 @@ interface Machine {
   last_sync_at: string | null;
   is_active: boolean;
   created_at: string;
+}
+
+const DEFAULT_NOTIF: NotificationPrefs = {
+  webhook_url: null,
+  webhook_enabled: false,
+  types: { project_budget: true, rate_limit: true },
+};
+
+function NotificationsSection({ prefs, save }: { prefs: { notifications?: NotificationPrefs }; save: (data: Record<string, unknown>) => void }) {
+  const notif = { ...DEFAULT_NOTIF, ...prefs.notifications };
+  const types = { ...DEFAULT_NOTIF.types, ...notif.types };
+
+  const [webhookUrl, setWebhookUrl] = useState(notif.webhook_url || "");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  const update = (patch: Partial<NotificationPrefs>) => {
+    save({ notifications: { ...notif, ...patch } });
+  };
+
+  const handleSave = () => {
+    update({ webhook_url: webhookUrl || null, webhook_enabled: !!webhookUrl, types });
+  };
+
+  const handleTest = async () => {
+    if (!webhookUrl) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const ok = await testWebhook(webhookUrl);
+      setTestResult(ok ? "Webhook sent!" : "Webhook failed — check the URL");
+    } catch {
+      setTestResult("Webhook failed — check the URL");
+    }
+    setTesting(false);
+  };
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 space-y-4">
+      <h3 className="text-sm font-medium">Notifications</h3>
+
+      <div>
+        <label className="block text-xs text-slate-400 mb-1">Webhook URL</label>
+        <input
+          type="url"
+          value={webhookUrl}
+          onChange={(e) => setWebhookUrl(e.target.value)}
+          placeholder="https://discord.com/api/webhooks/..."
+          className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-xs font-mono outline-none focus:border-sky-500/50"
+        />
+        <p className="mt-1 text-[10px] text-slate-600">Discord, Slack, or any webhook that accepts JSON.</p>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs text-slate-400">Send alert when:</p>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={types.project_budget}
+            onChange={(e) => update({ types: { ...types, project_budget: e.target.checked } })}
+            className="rounded border-white/[0.1] bg-white/[0.05]"
+          />
+          <span className="text-xs text-slate-300">Project budget reaches 90%</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={types.rate_limit}
+            onChange={(e) => update({ types: { ...types, rate_limit: e.target.checked } })}
+            className="rounded border-white/[0.1] bg-white/[0.05]"
+          />
+          <span className="text-xs text-slate-300">Rate limit (5h or weekly) reaches 90%</span>
+        </label>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleTest}
+          disabled={testing || !webhookUrl}
+          className="rounded-lg border border-white/[0.06] px-3 py-1.5 text-xs text-slate-300 hover:bg-white/[0.04] disabled:opacity-50"
+        >
+          {testing ? "Sending..." : "Test Webhook"}
+        </button>
+        <button
+          onClick={handleSave}
+          className="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-600"
+        >
+          Save
+        </button>
+      </div>
+
+      {testResult && (
+        <p className={`text-[10px] ${testResult.includes("sent") ? "text-emerald-400" : "text-rose-400"}`}>
+          {testResult}
+        </p>
+      )}
+
+      <p className="text-[10px] text-slate-600">
+        Requires cron: POST to <code className="text-slate-400">/api/cron/check-notifications</code> every 15 min
+        with <code className="text-slate-400">X-Cron-Secret</code> header.
+      </p>
+    </div>
+  );
 }
 
 export function Settings() {
@@ -309,6 +413,9 @@ export function Settings() {
           Projects without a budget won't trigger alerts.
         </p>
       </div>
+
+      {/* Notifications */}
+      <NotificationsSection prefs={prefs} save={save} />
 
       {/* Export */}
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">

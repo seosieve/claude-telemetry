@@ -8,6 +8,7 @@ const PUBLIC_PATHS = [
   "/api/auth/login",
   "/api/auth/callback",
   "/api/auth/me",
+  "/api/cron/check-notifications",
 ];
 
 function isPublicPath(pathname: string): boolean {

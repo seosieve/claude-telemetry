@@ -255,6 +255,15 @@ export async function fetchBlocks(opts?: {
 
 // --- Preferences ---
 
+export interface NotificationPrefs {
+  webhook_url: string | null;
+  webhook_enabled: boolean;
+  types: {
+    project_budget: boolean;
+    rate_limit: boolean;
+  };
+}
+
 export interface UserPreferences {
   user_id: string;
   plan_cost: number | null;
@@ -263,6 +272,7 @@ export interface UserPreferences {
   alert_thresholds: { daily: number; weekly: number };
   week_start_day: string;
   theme: string;
+  notifications: NotificationPrefs;
   updated_at: string;
 }
 
@@ -284,6 +294,24 @@ export async function updatePreferences(
     throw new Error(`API error ${res.status}: ${text}`);
   }
   return res.json();
+}
+
+// --- Notifications ---
+
+export async function testWebhook(webhookUrl: string): Promise<boolean> {
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      embeds: [{
+        title: "Claude Telemetry — Test",
+        description: "Webhook is configured correctly!",
+        color: 5763719,
+        footer: { text: "claude-telemetry" },
+      }],
+    }),
+  });
+  return res.ok;
 }
 
 // --- Exports ---

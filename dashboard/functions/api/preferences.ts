@@ -99,6 +99,7 @@ export const onRequestPut: PagesFunction<Env> = async (context) => {
     "alert_thresholds",
     "week_start_day",
     "theme",
+    "notifications",
   ];
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const key of allowed) {
