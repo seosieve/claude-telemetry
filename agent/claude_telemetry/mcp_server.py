@@ -343,6 +343,373 @@ def get_plan_savings(days: int = 30) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Analytics tools
+# ---------------------------------------------------------------------------
+
+
+def _resolve_period(name: str) -> tuple[str, str, str]:
+    """Resolve a named period to (start, end, label)."""
+    today = date.today()
+    periods: dict[str, tuple[str, str, str]] = {
+        "today": (today.isoformat(), today.isoformat(), "Today"),
+        "yesterday": ((today - timedelta(days=1)).isoformat(), (today - timedelta(days=1)).isoformat(), "Yesterday"),
+        "this_week": ((today - timedelta(days=today.weekday())).isoformat(), today.isoformat(), "This week"),
+        "last_week": (
+            (today - timedelta(days=today.weekday() + 7)).isoformat(),
+            (today - timedelta(days=today.weekday() + 1)).isoformat(),
+            "Last week",
+        ),
+        "this_month": (today.replace(day=1).isoformat(), today.isoformat(), "This month"),
+        "last_month": (
+            (today.replace(day=1) - timedelta(days=1)).replace(day=1).isoformat(),
+            (today.replace(day=1) - timedelta(days=1)).isoformat(),
+            "Last month",
+        ),
+    }
+    if name not in periods:
+        raise ValueError(f"Unknown period '{name}'. Use: {', '.join(periods)}")
+    return periods[name]
+
+
+def _sum_usage(rows: list[dict]) -> tuple[float, int]:
+    """Sum cost and tokens from usage rows."""
+    cost = sum(float(r.get("total_cost", 0) or 0) for r in rows)
+    tokens = sum(int(r.get("total_tokens", 0) or 0) for r in rows)
+    return cost, tokens
+
+
+def _pct_change(old: float, new: float) -> str:
+    if old == 0:
+        return "+100%" if new > 0 else "0%"
+    pct = ((new - old) / old) * 100
+    return f"{pct:+.1f}%"
+
+
+@mcp.tool()
+def compare_periods(
+    period_a: str = "last_week",
+    period_b: str = "this_week",
+    machine_id: str | None = None,
+) -> str:
+    """Compare usage between two time periods.
+
+    Shows cost and token differences, percentage changes, and which
+    projects changed the most between periods.
+
+    Args:
+        period_a: First period (today, yesterday, this_week, last_week, this_month, last_month)
+        period_b: Second period (same options)
+        machine_id: Optional UUID to filter to a specific machine
+    """
+    client = _get_client()
+    start_a, end_a, label_a = _resolve_period(period_a)
+    start_b, end_b, label_b = _resolve_period(period_b)
+
+    params_a: dict[str, Any] = {"p_start_date": start_a, "p_end_date": end_a}
+    params_b: dict[str, Any] = {"p_start_date": start_b, "p_end_date": end_b}
+    if machine_id:
+        params_a["p_machine_id"] = machine_id
+        params_b["p_machine_id"] = machine_id
+
+    rows_a = client.rpc("get_usage_summary", params_a).execute().data or []
+    rows_b = client.rpc("get_usage_summary", params_b).execute().data or []
+
+    cost_a, tokens_a = _sum_usage(rows_a)
+    cost_b, tokens_b = _sum_usage(rows_b)
+    diff_cost = cost_b - cost_a
+    diff_tokens = tokens_b - tokens_a
+
+    lines = [
+        f"Period comparison: {label_a} vs {label_b}\n",
+        f"{'':20s} {label_a:>14s} {label_b:>14s} {'Change':>10s}",
+        "-" * 62,
+        f"{'Cost':<20s} ${cost_a:>13,.2f} ${cost_b:>13,.2f} {_pct_change(cost_a, cost_b):>10s}",
+        f"{'Tokens':<20s} {tokens_a:>14,} {tokens_b:>14,} {_pct_change(tokens_a, tokens_b):>10s}",
+    ]
+
+    # Top movers by project
+    proj_a_params: dict[str, Any] = {"p_start_date": start_a, "p_end_date": end_a}
+    proj_b_params: dict[str, Any] = {"p_start_date": start_b, "p_end_date": end_b}
+    if machine_id:
+        proj_a_params["p_machine_id"] = machine_id
+        proj_b_params["p_machine_id"] = machine_id
+
+    projs_a = client.rpc("get_project_costs", proj_a_params).execute().data or []
+    projs_b = client.rpc("get_project_costs", proj_b_params).execute().data or []
+
+    cost_map_a = {p["project"]: float(p.get("total_cost", 0) or 0) for p in projs_a}
+    cost_map_b = {p["project"]: float(p.get("total_cost", 0) or 0) for p in projs_b}
+    all_projects = set(cost_map_a) | set(cost_map_b)
+
+    movers = []
+    for proj in all_projects:
+        ca = cost_map_a.get(proj, 0)
+        cb = cost_map_b.get(proj, 0)
+        movers.append((proj, cb - ca, ca, cb))
+
+    movers.sort(key=lambda x: abs(x[1]), reverse=True)
+
+    if movers:
+        lines.append(f"\nTop movers:")
+        for proj, diff, ca, cb in movers[:5]:
+            arrow = "+" if diff >= 0 else ""
+            lines.append(f"  {proj:<30s} ${ca:>8,.2f} -> ${cb:>8,.2f} ({arrow}${diff:,.2f})")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_trends(days: int = 30, machine_id: str | None = None) -> str:
+    """Analyze usage trends over time.
+
+    Calculates trend direction (up/down/stable), average daily cost,
+    and a 7-day projection based on recent patterns.
+
+    Args:
+        days: Number of days to analyze (default 30)
+        machine_id: Optional UUID to filter to a specific machine
+    """
+    import statistics
+
+    client = _get_client()
+    end = date.today().isoformat()
+    start = (date.today() - timedelta(days=days)).isoformat()
+
+    params: dict[str, Any] = {"p_start_date": start, "p_end_date": end}
+    if machine_id:
+        params["p_machine_id"] = machine_id
+
+    rows = client.rpc("get_usage_summary", params).execute().data or []
+
+    if len(rows) < 3:
+        return f"Not enough data for trend analysis (need 3+ days, have {len(rows)})."
+
+    daily_costs = [float(r.get("total_cost", 0) or 0) for r in rows]
+    avg = statistics.mean(daily_costs)
+    stdev = statistics.stdev(daily_costs) if len(daily_costs) > 1 else 0
+
+    # Simple linear regression: y = mx + b
+    n = len(daily_costs)
+    x_vals = list(range(n))
+    x_mean = statistics.mean(x_vals)
+    y_mean = avg
+    numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_vals, daily_costs))
+    denominator = sum((x - x_mean) ** 2 for x in x_vals)
+    slope = numerator / denominator if denominator else 0
+    intercept = y_mean - slope * x_mean
+
+    # Trend direction
+    if abs(slope) < avg * 0.02:
+        direction = "STABLE"
+    elif slope > 0:
+        direction = "UP"
+    else:
+        direction = "DOWN"
+
+    # 7-day projection
+    projected = [slope * (n + i) + intercept for i in range(7)]
+    proj_total = sum(max(0, p) for p in projected)
+
+    # Recent vs earlier comparison
+    mid = n // 2
+    first_half_avg = statistics.mean(daily_costs[:mid]) if mid > 0 else 0
+    second_half_avg = statistics.mean(daily_costs[mid:])
+
+    lines = [
+        f"Usage trend — last {days} days\n",
+        f"Direction:       {direction} ({slope:+.4f} $/day)",
+        f"Avg daily cost:  ${avg:,.2f}",
+        f"Std deviation:   ${stdev:,.2f}",
+        f"First half avg:  ${first_half_avg:,.2f}/day",
+        f"Second half avg: ${second_half_avg:,.2f}/day ({_pct_change(first_half_avg, second_half_avg)})",
+        f"\n7-day projection: ${proj_total:,.2f} total (${proj_total / 7:,.2f}/day avg)",
+    ]
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def detect_anomalies(days: int = 14, threshold_std: float = 2.0) -> str:
+    """Detect days with unusually high or low spending.
+
+    Flags days where cost deviates more than N standard deviations
+    from the mean. Useful for catching unexpected spikes.
+
+    Args:
+        days: Number of days to analyze (default 14)
+        threshold_std: Number of standard deviations to flag (default 2.0)
+    """
+    import statistics
+
+    client = _get_client()
+    end = date.today().isoformat()
+    start = (date.today() - timedelta(days=days)).isoformat()
+
+    rows = client.rpc("get_usage_summary", {
+        "p_start_date": start, "p_end_date": end,
+    }).execute().data or []
+
+    if len(rows) < 3:
+        return f"Not enough data (need 3+ days, have {len(rows)})."
+
+    daily_costs = [(r.get("date", "?"), float(r.get("total_cost", 0) or 0)) for r in rows]
+    costs = [c for _, c in daily_costs]
+    avg = statistics.mean(costs)
+    stdev = statistics.stdev(costs)
+
+    if stdev == 0:
+        return f"No variation in daily costs over the last {days} days (avg: ${avg:,.2f}/day)."
+
+    anomalies = []
+    for dt, cost in daily_costs:
+        z = (cost - avg) / stdev
+        if abs(z) >= threshold_std:
+            diff = cost - avg
+            anomalies.append((dt, cost, diff, z))
+
+    if not anomalies:
+        return (
+            f"No anomalies detected in the last {days} days.\n"
+            f"Average: ${avg:,.2f}/day, StdDev: ${stdev:,.2f}, Threshold: {threshold_std}x"
+        )
+
+    lines = [
+        f"Anomalies detected — last {days} days (avg: ${avg:,.2f}/day, threshold: {threshold_std}x StdDev)\n",
+        f"{'Date':<12s} {'Cost':>10s} {'vs Avg':>10s} {'Z-score':>8s}",
+        "-" * 44,
+    ]
+    for dt, cost, diff, z in anomalies:
+        arrow = "+" if diff >= 0 else ""
+        lines.append(f"{dt:<12s} ${cost:>9,.2f} {arrow}${diff:>8,.2f} {z:>+8.1f}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def compare_projects(project_a: str, project_b: str, days: int = 30) -> str:
+    """Compare two projects side by side.
+
+    Shows cost, tokens, and percentage difference for each metric.
+
+    Args:
+        project_a: First project name
+        project_b: Second project name
+        days: Look-back period in days (default 30)
+    """
+    client = _get_client()
+    end = date.today().isoformat()
+    start = (date.today() - timedelta(days=days)).isoformat()
+
+    rows = client.rpc("get_project_costs", {
+        "p_start_date": start, "p_end_date": end,
+    }).execute().data or []
+
+    proj_map = {r["project"]: r for r in rows}
+    a = proj_map.get(project_a)
+    b = proj_map.get(project_b)
+
+    if not a and not b:
+        return f"Neither '{project_a}' nor '{project_b}' found in the last {days} days."
+    if not a:
+        return f"Project '{project_a}' not found. '{project_b}' cost: ${float(b.get('total_cost', 0) or 0):,.2f}"
+    if not b:
+        return f"Project '{project_b}' not found. '{project_a}' cost: ${float(a.get('total_cost', 0) or 0):,.2f}"
+
+    cost_a = float(a.get("total_cost", 0) or 0)
+    cost_b = float(b.get("total_cost", 0) or 0)
+    tokens_a = int(a.get("total_tokens", 0) or 0)
+    tokens_b = int(b.get("total_tokens", 0) or 0)
+    model_a = a.get("primary_model") or "—"
+    model_b = b.get("primary_model") or "—"
+    machines_a = a.get("machines_used", 0)
+    machines_b = b.get("machines_used", 0)
+
+    lines = [
+        f"Project comparison — last {days} days\n",
+        f"{'':15s} {project_a:>20s} {project_b:>20s} {'Diff':>10s}",
+        "-" * 68,
+        f"{'Cost':<15s} ${cost_a:>19,.2f} ${cost_b:>19,.2f} {_pct_change(cost_a, cost_b):>10s}",
+        f"{'Tokens':<15s} {tokens_a:>20,} {tokens_b:>20,} {_pct_change(tokens_a, tokens_b):>10s}",
+        f"{'Primary model':<15s} {model_a:>20s} {model_b:>20s}",
+        f"{'Machines':<15s} {machines_a:>20} {machines_b:>20}",
+    ]
+
+    if cost_a + cost_b > 0:
+        winner = project_a if cost_a < cost_b else project_b
+        lines.append(f"\n{winner} is cheaper by ${abs(cost_b - cost_a):,.2f}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_cost_forecast(days_ahead: int = 7) -> str:
+    """Forecast future costs based on recent usage patterns.
+
+    Uses a 14-day moving average with trend adjustment to project
+    costs for the next N days.
+
+    Args:
+        days_ahead: Number of days to forecast (default 7)
+    """
+    import statistics
+
+    client = _get_client()
+    lookback = 14
+    end = date.today().isoformat()
+    start = (date.today() - timedelta(days=lookback)).isoformat()
+
+    rows = client.rpc("get_usage_summary", {
+        "p_start_date": start, "p_end_date": end,
+    }).execute().data or []
+
+    if len(rows) < 3:
+        return f"Not enough data for forecast (need 3+ days, have {len(rows)})."
+
+    daily_costs = [float(r.get("total_cost", 0) or 0) for r in rows]
+    n = len(daily_costs)
+    avg = statistics.mean(daily_costs)
+    stdev = statistics.stdev(daily_costs) if n > 1 else 0
+
+    # Linear regression for trend
+    x_vals = list(range(n))
+    x_mean = statistics.mean(x_vals)
+    numerator = sum((x - x_mean) * (y - avg) for x, y in zip(x_vals, daily_costs))
+    denominator = sum((x - x_mean) ** 2 for x in x_vals)
+    slope = numerator / denominator if denominator else 0
+    intercept = avg - slope * x_mean
+
+    # Project forward
+    forecasts = []
+    for i in range(days_ahead):
+        day_idx = n + i
+        predicted = max(0, slope * day_idx + intercept)
+        forecasts.append(predicted)
+
+    total = sum(forecasts)
+    avg_forecast = total / days_ahead if days_ahead > 0 else 0
+    low = sum(max(0, f - stdev) for f in forecasts)
+    high = sum(f + stdev for f in forecasts)
+
+    lines = [
+        f"Cost forecast — next {days_ahead} days (based on last {n} days)\n",
+        f"Predicted total:  ${total:,.2f}",
+        f"Daily average:    ${avg_forecast:,.2f}/day",
+        f"Confidence range: ${low:,.2f} — ${high:,.2f}",
+        f"Trend:            {slope:+.4f} $/day",
+        f"\nRecent average:   ${avg:,.2f}/day (last {n} days)",
+    ]
+
+    # Day-by-day forecast
+    lines.append(f"\n{'Day':<5s} {'Date':<12s} {'Predicted':>10s}")
+    lines.append("-" * 30)
+    for i, cost in enumerate(forecasts):
+        d = date.today() + timedelta(days=i + 1)
+        lines.append(f"{i + 1:<5d} {d.isoformat():<12s} ${cost:>9,.2f}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

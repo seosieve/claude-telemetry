@@ -102,6 +102,7 @@ def main() -> None:
 
 @main.command()
 @click.option("--non-interactive", is_flag=True, help="Skip prompts, use flags")
+@click.option("--minimal", is_flag=True, help="Only configure base settings (no hooks/MCP/service)")
 @click.option("--name", "machine_name", default=None, help="Machine name")
 @click.option("--supabase-url", default=None, help="Supabase project URL")
 @click.option("--supabase-key", default=None, help="Supabase service_role key")
@@ -109,17 +110,21 @@ def main() -> None:
 @click.option("--api-key", default=None, help="Pre-generated API key")
 def setup(
     non_interactive: bool,
+    minimal: bool,
     machine_name: str | None,
     supabase_url: str | None,
     supabase_key: str | None,
     machine_id: str | None,
     api_key: str | None,
 ) -> None:
-    """Configure machine, Supabase connection, and verify dependencies."""
+    """Setup wizard — configure everything in one command.
 
-    click.echo("=== Claude Usage Tracker — Setup ===\n")
+    Configures Supabase connection, verifies dependencies, sets up
+    real-time hooks, MCP server, statusline, and daemon service.
+    """
+    click.echo("=== Claude Telemetry — Setup Wizard ===\n")
 
-    # Check Node.js / npx
+    # --- Step 1: Check Node.js ---
     if not shutil.which("npx"):
         click.echo("ERROR: npx not found. Install Node.js 18+ first.")
         click.echo("  Windows: winget install OpenJS.NodeJS")
@@ -132,7 +137,18 @@ def setup(
     ).stdout.strip()
     click.echo(f"  Node.js: {node_ver}")
 
-    # Check ccost: venv first, then PATH
+    # --- Step 2: Check/install ccusage ---
+    if not shutil.which("ccusage") and not shutil.which("npx"):
+        pass  # npx will handle it
+    ccusage_check = subprocess.run(
+        ["npx", "ccusage@latest", "--version"], capture_output=True, text=True, timeout=30,
+    )
+    if ccusage_check.returncode == 0:
+        click.echo(f"  ccusage: {ccusage_check.stdout.strip() or 'available via npx'}")
+    else:
+        click.echo("  ccusage: available via npx (will download on first use)")
+
+    # --- Step 3: Check/install ccost ---
     try:
         from .collector import _find_ccost
         ccost_path = _find_ccost()
@@ -140,18 +156,33 @@ def setup(
             [ccost_path, "--version"], capture_output=True, text=True
         ).stdout.strip()
         ccost_installed = True
-        click.echo(f"  ccost:   {ccost_ver or 'installed'} (rate limit tracking enabled)")
+        click.echo(f"  ccost:   {ccost_ver or 'installed'}")
     except FileNotFoundError:
         ccost_installed = False
         ccost_path = None
-        click.echo("  ccost:   not found (rate limit tracking disabled)")
-        click.echo("           Install from https://github.com/toolsu/ccost")
+        if not non_interactive:
+            click.echo("  ccost:   not found")
+            if click.confirm("  Install ccost globally? (enables rate limit tracking)", default=True):
+                result = subprocess.run(
+                    ["npm", "install", "-g", "ccost"], capture_output=True, text=True
+                )
+                if result.returncode == 0:
+                    try:
+                        ccost_path = _find_ccost()
+                        ccost_installed = True
+                        click.echo("  ccost:   installed!")
+                    except FileNotFoundError:
+                        click.echo("  ccost:   install succeeded but not found in PATH")
+                else:
+                    click.echo(f"  ccost:   install failed ({result.stderr.strip()[:80]})")
+        else:
+            click.echo("  ccost:   not found (rate limit tracking disabled)")
 
     claude_dir = detect_claude_data_dir()
     click.echo(f"  Claude dir: {claude_dir} ({'exists' if claude_dir.exists() else 'NOT FOUND'})")
     click.echo()
 
-    # Load existing config or start fresh
+    # --- Step 4: Config (Supabase connection + machine) ---
     existing_config: dict | None = None
     if CONFIG_FILE.exists():
         existing_config = json.loads(CONFIG_FILE.read_text())
@@ -168,9 +199,10 @@ def setup(
     if existing_config and existing_config.get("machine_id"):
         config["machine_id"] = existing_config["machine_id"]
         config["api_key"] = existing_config.get("api_key") or generate_api_key()
-        # Preserve last_sync timestamps
         if existing_config.get("last_sync"):
             config["last_sync"] = existing_config["last_sync"]
+        if existing_config.get("features"):
+            config["features"] = {**config["features"], **existing_config["features"]}
 
     if non_interactive:
         if not machine_name or not supabase_url or not supabase_key:
@@ -179,7 +211,6 @@ def setup(
         config["machine_name"] = machine_name
         config["supabase_url"] = supabase_url
         config["supabase_service_key"] = supabase_key
-        # CLI flags override preserved values
         if machine_id:
             config["machine_id"] = machine_id
         elif not config.get("machine_id"):
@@ -226,14 +257,92 @@ def setup(
             "os": detect_os(),
             "hostname": platform.node(),
         }, on_conflict="id").execute()
-        click.echo(f"Machine registered in Supabase: {config['machine_name']}")
+        click.echo(f"Machine registered: {config['machine_name']}")
     except Exception as e:
-        click.echo(f"WARNING: Could not register machine in Supabase: {e}")
+        click.echo(f"WARNING: Could not register machine: {e}")
         click.echo("You can retry with 'claude-telemetry sync' after fixing the connection.")
 
-    click.echo(f"\nMachine ID: {config['machine_id']}")
-    click.echo(f"API Key:    {config['api_key'][:10]}...{config['api_key'][-4:]}")
-    click.echo("\nSetup complete! Run 'claude-telemetry sync' to start syncing.")
+    # --- Step 5: Full setup (unless --minimal) ---
+    auto_configure = not minimal
+    if not minimal and not non_interactive:
+        click.echo()
+        auto_configure = click.confirm("Configure everything automatically? (hooks, MCP, statusline, service)", default=True)
+
+    configured = []
+
+    if auto_configure:
+        click.echo()
+
+        # Statusline
+        try:
+            _setup_statusline_internal()
+            configured.append("statusline")
+            click.echo("  Statusline configured")
+        except Exception as e:
+            click.echo(f"  Statusline failed: {e}")
+
+        # Hooks
+        try:
+            _setup_hooks_internal()
+            config = load_config()
+            config.setdefault("features", {})
+            config["features"]["hooks_configured"] = True
+            save_config(config)
+            configured.append("hooks")
+            click.echo("  Hooks configured (SessionEnd + Stop)")
+        except Exception as e:
+            click.echo(f"  Hooks failed: {e}")
+
+        # MCP server
+        try:
+            _setup_mcp_internal()
+            configured.append("mcp")
+            click.echo("  MCP server registered")
+        except Exception as e:
+            click.echo(f"  MCP server failed: {e}")
+
+        # Install service
+        try:
+            system = platform.system()
+            tracker_path = shutil.which("claude-telemetry") or f"{sys.executable} -m claude_telemetry.cli"
+            if system == "Windows":
+                _install_windows_service(tracker_path)
+            elif system == "Darwin":
+                _install_macos_service(tracker_path)
+            else:
+                _install_linux_service(tracker_path)
+            configured.append("service")
+        except Exception as e:
+            click.echo(f"  Service install failed: {e}")
+
+    # --- Step 6: Initial sync ---
+    if auto_configure:
+        click.echo("\n  Running initial sync...")
+        try:
+            from .daemon import _run_sync_cycle
+            config = load_config()
+            results = _run_sync_cycle(config)
+            total = sum(results.values())
+            click.echo(f"  Synced {total} records")
+            configured.append("sync")
+        except Exception as e:
+            click.echo(f"  Initial sync failed: {e}")
+
+    # --- Summary ---
+    click.echo(f"\n{'=' * 40}")
+    click.echo(f"Machine:  {config['machine_name']}")
+    click.echo(f"ID:       {config['machine_id'][:8]}...")
+    if configured:
+        click.echo(f"Enabled:  {', '.join(configured)}")
+    click.echo()
+    if auto_configure:
+        click.echo("Everything is configured! Run 'claude-telemetry doctor' to verify.")
+    else:
+        click.echo("Base config saved. Run individual commands to enable more features:")
+        click.echo("  claude-telemetry setup-hooks        # real-time sync")
+        click.echo("  claude-telemetry setup-mcp          # Claude Code MCP integration")
+        click.echo("  claude-telemetry setup-statusline   # rate limit tracking")
+        click.echo("  claude-telemetry install-service    # background daemon")
 
 
 # ---------------------------------------------------------------------------
@@ -471,9 +580,8 @@ def uninstall(yes: bool) -> None:
     )
 
 
-@main.command("setup-statusline")
-def setup_statusline() -> None:
-    """Configure Claude Code statusline for rate limit tracking."""
+def _setup_statusline_internal() -> None:
+    """Internal: configure statusline (no user output)."""
     claude_dir = Path.home() / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
     system = platform.system()
@@ -486,7 +594,6 @@ def setup_statusline() -> None:
             $line = '{{"ts":' + $ts + ',"data":' + $input.Trim() + '}}'
             Add-Content -Path "$env:USERPROFILE\\.claude\\statusline.jsonl" -Value $line -Encoding UTF8
         """))
-        click.echo(f"Created {script_path}")
     else:
         script_path = claude_dir / "statusline.sh"
         script_path.write_text(textwrap.dedent("""\
@@ -495,40 +602,25 @@ def setup_statusline() -> None:
             echo "{\\"ts\\":$(date +%s),\\"data\\":$input}" >> ~/.claude/statusline.jsonl
         """))
         script_path.chmod(0o755)
-        click.echo(f"Created {script_path}")
 
-    # Update settings.json
     settings_path = claude_dir / "settings.json"
     settings: dict = {}
     if settings_path.exists():
-        import json as _json
         try:
-            settings = _json.loads(settings_path.read_text())
+            settings = json.loads(settings_path.read_text())
         except Exception:
             pass
-
     settings.setdefault("hooks", {})
-    settings["hooks"]["StatusLine"] = [
-        {
-            "type": "command",
-            "command": str(script_path),
-        }
-    ]
-
-    import json as _json
-    settings_path.write_text(_json.dumps(settings, indent=2))
-    click.echo(f"Updated {settings_path}")
-    click.echo("\nStatusline configured! Rate limit tracking will start on next Claude Code session.")
+    settings["hooks"]["StatusLine"] = [{"type": "command", "command": str(script_path)}]
+    settings_path.write_text(json.dumps(settings, indent=2))
 
 
-@main.command("setup-hooks")
-def setup_hooks() -> None:
-    """Configure Claude Code hooks for real-time data sync on session end."""
+def _setup_hooks_internal() -> None:
+    """Internal: configure hooks (no user output)."""
     claude_dir = Path.home() / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
     system = platform.system()
 
-    # Determine Python path (use pythonw on Windows for windowless execution)
     python_path = sys.executable
     if system == "Windows":
         pythonw = Path(sys.executable).parent / "pythonw.exe"
@@ -540,7 +632,6 @@ def setup_hooks() -> None:
         script_path.write_text(textwrap.dedent(f"""\
             Start-Process -FilePath "{python_path}" -ArgumentList "-m","claude_telemetry.hook_sync" -WindowStyle Hidden
         """))
-        click.echo(f"Created {script_path}")
     else:
         script_path = claude_dir / "hook-session-sync.sh"
         script_path.write_text(textwrap.dedent(f"""\
@@ -549,9 +640,7 @@ def setup_hooks() -> None:
             disown
         """))
         script_path.chmod(0o755)
-        click.echo(f"Created {script_path}")
 
-    # Update ~/.claude/settings.json — merge, don't overwrite existing hooks
     settings_path = claude_dir / "settings.json"
     settings: dict = {}
     if settings_path.exists():
@@ -559,19 +648,44 @@ def setup_hooks() -> None:
             settings = json.loads(settings_path.read_text())
         except Exception:
             pass
-
     settings.setdefault("hooks", {})
     hook_entry = {"hooks": [{"type": "command", "command": str(script_path)}]}
-
-    # SessionEnd — fires once when session ends (primary, guarantees final sync)
     settings["hooks"]["SessionEnd"] = [hook_entry]
-    # Stop — fires after each response (secondary, incremental updates with debounce)
     settings["hooks"]["Stop"] = [hook_entry]
-
     settings_path.write_text(json.dumps(settings, indent=2))
-    click.echo(f"Updated {settings_path}")
 
-    # Mark hooks as configured in agent config
+
+def _setup_mcp_internal() -> None:
+    """Internal: register MCP server (no user output)."""
+    python_path = sys.executable
+
+    config_path = Path.home() / ".claude.json"
+    config_data: dict = {}
+    if config_path.exists():
+        try:
+            config_data = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    config_data.setdefault("mcpServers", {})
+    config_data["mcpServers"]["claude-telemetry"] = {
+        "command": python_path,
+        "args": ["-m", "claude_telemetry.mcp_server"],
+    }
+    config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+
+
+@main.command("setup-statusline")
+def setup_statusline() -> None:
+    """Configure Claude Code statusline for rate limit tracking."""
+    _setup_statusline_internal()
+    click.echo("Statusline configured! Rate limit tracking will start on next Claude Code session.")
+
+
+@main.command("setup-hooks")
+def setup_hooks() -> None:
+    """Configure Claude Code hooks for real-time data sync on session end."""
+    _setup_hooks_internal()
     try:
         config = load_config()
         config.setdefault("features", {})
@@ -579,10 +693,7 @@ def setup_hooks() -> None:
         save_config(config)
     except FileNotFoundError:
         click.echo("WARNING: Agent not configured yet. Run 'claude-telemetry setup' first.")
-
-    click.echo("\nHooks configured!")
-    click.echo("  SessionEnd — syncs data when session ends")
-    click.echo("  Stop       — incremental updates (debounced, max 1 per 2 min)")
+    click.echo("Hooks configured! (SessionEnd + Stop)")
     click.echo("The daemon (if running) will switch to a 60-minute backup interval.")
 
 
@@ -646,61 +757,164 @@ def hook_status() -> None:
 
 @main.command("setup-mcp")
 def setup_mcp() -> None:
-    """Register the claude-telemetry MCP server with Claude Code.
-
-    Allows you to query usage data directly from Claude Code:
-      "How much did I spend this week?"
-      "What's my most expensive project?"
-    """
-    # Check that agent is configured
+    """Register the claude-telemetry MCP server with Claude Code."""
     try:
         load_config()
     except FileNotFoundError:
         click.echo("ERROR: Agent not configured. Run 'claude-telemetry setup' first.")
         raise SystemExit(1)
 
-    # Determine Python path (same venv that has claude_telemetry installed)
-    python_path = sys.executable
-
-    # MCP servers go in ~/.claude.json (NOT ~/.claude/settings.json)
-    config_path = Path.home() / ".claude.json"
-
-    config_data: dict = {}
-    if config_path.exists():
-        try:
-            config_data = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    # Add MCP server entry — preserve all other fields
-    config_data.setdefault("mcpServers", {})
-    config_data["mcpServers"]["claude-telemetry"] = {
-        "command": python_path,
-        "args": ["-m", "claude_telemetry.mcp_server"],
-    }
-
-    config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
-    click.echo(f"Updated {config_path}")
-
-    # Clean up stale entry from settings.json (old location)
-    settings_path = Path.home() / ".claude" / "settings.json"
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            if "mcpServers" in settings and "claude-telemetry" in settings["mcpServers"]:
-                del settings["mcpServers"]["claude-telemetry"]
-                if not settings["mcpServers"]:
-                    del settings["mcpServers"]
-                settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-                click.echo(f"Cleaned stale entry from {settings_path}")
-        except Exception:
-            pass
-    click.echo("\nMCP server registered: claude-telemetry")
+    _setup_mcp_internal()
+    click.echo("MCP server registered: claude-telemetry")
     click.echo("\nYou can now ask Claude Code things like:")
     click.echo('  "How much did I spend this week across all machines?"')
     click.echo('  "What are my top 5 projects by cost?"')
     click.echo('  "Show me the rate limit status"')
     click.echo("\nRestart Claude Code to activate the MCP server.")
+
+
+@main.command()
+def doctor() -> None:
+    """Health check — verify all components are configured and working."""
+    click.echo("Claude Telemetry — Health Check\n")
+    passed = 0
+    total = 0
+
+    def _check(label: str, ok: bool, detail: str = "", hint: str = "") -> None:
+        nonlocal passed, total
+        total += 1
+        if ok:
+            passed += 1
+            mark = click.style("OK", fg="green")
+            click.echo(f"  {mark}  {label:<28s} {detail}")
+        else:
+            mark = click.style("FAIL", fg="red")
+            click.echo(f"  {mark}  {label:<28s} {hint}")
+
+    # 1. ccusage (global install OR available via npx)
+    ccusage_ok = bool(shutil.which("ccusage")) or bool(shutil.which("npx"))
+    _check("ccusage", ccusage_ok,
+           "installed" if shutil.which("ccusage") else "available via npx",
+           "Install Node.js 18+ (npx required)")
+
+    # 2. ccost
+    ccost_ok = False
+    try:
+        from .collector import _find_ccost
+        ccost_path = _find_ccost()
+        r = subprocess.run([ccost_path, "--version"], capture_output=True, text=True)
+        ccost_ok = r.returncode == 0
+        _check("ccost", ccost_ok, r.stdout.strip() or "installed", "Run: npm install -g ccost")
+    except FileNotFoundError:
+        _check("ccost", False, hint="Run: npm install -g ccost")
+
+    # 3. Config
+    config_ok = False
+    try:
+        config = load_config()
+        config_ok = bool(config.get("machine_id") and config.get("supabase_url"))
+        name = config.get("machine_name", "?")
+        mid = config.get("machine_id", "?")[:8]
+        _check("Config valid", config_ok, f"{name} ({mid}...)", "Run: claude-telemetry setup")
+    except FileNotFoundError:
+        _check("Config valid", False, hint="Run: claude-telemetry setup")
+        config = {}
+
+    # 4. Supabase reachable
+    if config_ok:
+        try:
+            from supabase import create_client
+            client = create_client(config["supabase_url"], config["supabase_service_key"])
+            client.table("machines").select("id").limit(1).execute()
+            _check("Supabase reachable", True, "connected")
+        except Exception as e:
+            _check("Supabase reachable", False, hint=f"Check URL/key: {e}")
+    else:
+        _check("Supabase reachable", False, hint="Fix config first")
+
+    # 5. Statusline
+    settings_path = Path.home() / ".claude" / "settings.json"
+    statusline_ok = False
+    if settings_path.exists():
+        try:
+            s = json.loads(settings_path.read_text())
+            statusline_ok = "StatusLine" in s.get("hooks", {})
+        except Exception:
+            pass
+    _check("Statusline configured", statusline_ok,
+           hint="Run: claude-telemetry setup-statusline")
+
+    # 6. Hooks
+    hooks_ok = False
+    if settings_path.exists():
+        try:
+            s = json.loads(settings_path.read_text())
+            hooks = s.get("hooks", {})
+            hooks_ok = "SessionEnd" in hooks and "Stop" in hooks
+        except Exception:
+            pass
+    _check("Hooks configured", hooks_ok,
+           "SessionEnd + Stop" if hooks_ok else "",
+           "Run: claude-telemetry setup-hooks")
+
+    # 7. MCP server
+    mcp_ok = False
+    claude_json = Path.home() / ".claude.json"
+    if claude_json.exists():
+        try:
+            d = json.loads(claude_json.read_text(encoding="utf-8"))
+            mcp_ok = "claude-telemetry" in d.get("mcpServers", {})
+        except Exception:
+            pass
+    _check("MCP server registered", mcp_ok,
+           hint="Run: claude-telemetry setup-mcp")
+
+    # 8. Daemon running
+    daemon_ok = False
+    system = platform.system()
+    if system == "Windows":
+        r = subprocess.run(
+            ["schtasks", "/Query", "/TN", "ClaudeUsageTracker", "/FO", "LIST"],
+            capture_output=True, text=True,
+        )
+        daemon_ok = r.returncode == 0
+    elif system == "Darwin":
+        plist = Path.home() / "Library/LaunchAgents/com.claude-telemetry.plist"
+        daemon_ok = plist.exists()
+    else:
+        r = subprocess.run(
+            ["systemctl", "--user", "is-active", "claude-telemetry"],
+            capture_output=True, text=True,
+        )
+        daemon_ok = r.stdout.strip() == "active"
+    _check("Daemon running", daemon_ok,
+           hint="Run: claude-telemetry install-service")
+
+    # 9. Last sync
+    sync_ok = False
+    if config:
+        last_daily = config.get("last_sync", {}).get("daily_usage")
+        if last_daily:
+            sync_ok = True
+            _check("Last sync", True, last_daily[:19].replace("T", " "))
+        else:
+            _check("Last sync", False, hint="Run: claude-telemetry sync")
+    else:
+        _check("Last sync", False, hint="Fix config first")
+
+    # 10. Rate limits
+    lock_file = CONFIG_DIR / ".hook_lock"
+    rl_ok = False
+    if lock_file.exists():
+        age = time.time() - lock_file.stat().st_mtime
+        rl_ok = age < 86400  # active within 24h
+    _check("Hook sync active", rl_ok,
+           f"{int(age // 60)}m ago" if rl_ok else "",
+           "Hooks may not be firing — check logs")
+
+    # Summary
+    color = "green" if passed == total else ("yellow" if passed >= total - 2 else "red")
+    click.echo(f"\n  {click.style(f'{passed}/{total}', fg=color)} checks passed")
 
 
 @main.command("service-status")

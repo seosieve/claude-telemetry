@@ -47,61 +47,32 @@ function getCommands(
         `  --machine-id "${config.machine_id}"`,
       ].join("\n");
 
-  const ccostInstall = isWin
-    ? `powershell -Command "Invoke-WebRequest -Uri 'https://github.com/toolsu/ccost/releases/latest/download/ccost-win32-x64.zip' -OutFile ccost.zip; Expand-Archive ccost.zip -DestinationPath .${cdSep}venv${cdSep}Scripts${cdSep} -Force; Remove-Item ccost.zip"`
-    : os === "macos"
-      ? "curl -sL https://github.com/toolsu/ccost/releases/latest/download/ccost-darwin-arm64.tar.gz | tar xz -C ./venv/bin/"
-      : "curl -sL https://github.com/toolsu/ccost/releases/latest/download/ccost-linux-x64.tar.gz | tar xz -C ./venv/bin/";
-
   return [
     {
       step: "1",
-      label: "Clone and install in virtual environment",
+      label: "Install dependencies",
       code: [
         "git clone https://github.com/RyanTech00/claude-telemetry.git",
         `cd claude-telemetry${cdSep}agent`,
         `${pythonCmd} -m venv venv`,
         activateCmd,
         "pip install -e .",
-        ccostInstall,
       ].join("\n"),
     },
     {
       step: "2",
-      label: "Configure agent",
+      label: "Run setup wizard",
       code: setupCmd,
       warning:
-        "Paste the service key you copied from the previous step. The key is only shown once.",
+        "Paste the service key from the previous step. The wizard will configure hooks, MCP server, statusline, and daemon automatically.",
     },
     {
       step: "3",
-      label: "Start agent service",
-      code: [activateCmd, "claude-telemetry install-service"].join("\n"),
+      label: "Verify installation",
+      code: [activateCmd, "claude-telemetry doctor"].join("\n"),
       warning: isWin
-        ? "Run PowerShell as Administrator (right-click \u2192 Run as Administrator)"
+        ? "Run PowerShell as Administrator if the service check fails."
         : undefined,
-    },
-    {
-      step: "4",
-      label: "Verify",
-      code: [
-        activateCmd,
-        "claude-telemetry service-status",
-        "claude-telemetry sync --verbose",
-      ].join("\n"),
-    },
-    {
-      step: "5",
-      label: "Enable rate limit tracking (optional)",
-      code: [activateCmd, "claude-telemetry setup-statusline"].join("\n"),
-      warning: "This enables 5-hour and weekly rate limit % tracking in the dashboard.",
-    },
-    {
-      step: "6",
-      label: "Enable real-time sync (recommended)",
-      code: [activateCmd, "claude-telemetry setup-hooks"].join("\n"),
-      warning:
-        "Replaces 15-minute polling with instant sync on session end. The daemon becomes a 60-minute backup.",
     },
   ];
 }
