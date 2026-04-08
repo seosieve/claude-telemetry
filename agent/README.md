@@ -21,10 +21,10 @@ pip install -e .
 
 ```bash
 # Interactive
-claude-tracker setup
+claude-telemetry setup
 
 # Non-interactive (from Deploy page)
-claude-tracker setup --non-interactive \
+claude-telemetry setup --non-interactive \
   --name "My PC" \
   --supabase-url "https://xxx.supabase.co" \
   --supabase-key "eyJ..." \
@@ -35,20 +35,20 @@ claude-tracker setup --non-interactive \
 
 | Command | Description |
 |---|---|
-| `claude-tracker setup` | Configure agent |
-| `claude-tracker sync` | Manual sync |
-| `claude-tracker sync --verbose` | Sync with details |
-| `claude-tracker sync --force` | Re-sync all data |
-| `claude-tracker daemon` | Auto-sync foreground |
-| `claude-tracker daemon --interval 10` | Custom interval |
-| `claude-tracker daemon --background` | Run detached |
-| `claude-tracker install-service` | Install as system service |
-| `claude-tracker uninstall-service` | Remove service |
-| `claude-tracker service-status` | Check daemon status |
-| `claude-tracker status` | Show config info |
-| `claude-tracker local --daily` | View data locally |
-| `claude-tracker local --sessions` | View sessions locally |
-| `claude-tracker local --projects` | View project summary |
+| `claude-telemetry setup` | Configure agent |
+| `claude-telemetry sync` | Manual sync |
+| `claude-telemetry sync --verbose` | Sync with details |
+| `claude-telemetry sync --force` | Re-sync all data |
+| `claude-telemetry daemon` | Auto-sync foreground |
+| `claude-telemetry daemon --interval 10` | Custom interval |
+| `claude-telemetry daemon --background` | Run detached |
+| `claude-telemetry install-service` | Install as system service |
+| `claude-telemetry uninstall-service` | Remove service |
+| `claude-telemetry service-status` | Check daemon status |
+| `claude-telemetry status` | Show config info |
+| `claude-telemetry local --daily` | View data locally |
+| `claude-telemetry local --sessions` | View sessions locally |
+| `claude-telemetry local --projects` | View project summary |
 
 ## How It Works
 

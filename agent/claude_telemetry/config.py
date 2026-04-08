@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-CONFIG_DIR = Path.home() / ".claude-tracker"
+CONFIG_DIR = Path.home() / ".claude-telemetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -56,7 +56,7 @@ def generate_api_key() -> str:
 def load_config() -> dict[str, Any]:
     if not CONFIG_FILE.exists():
         raise FileNotFoundError(
-            f"Config not found at {CONFIG_FILE}. Run 'claude-tracker setup' first."
+            f"Config not found at {CONFIG_FILE}. Run 'claude-telemetry setup' first."
         )
     with open(CONFIG_FILE) as f:
         return json.load(f)

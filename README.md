@@ -82,9 +82,9 @@ cd claude-telemetry/agent
 python3 -m venv venv
 source venv/bin/activate  # Windows: .\venv\Scripts\Activate
 pip install -e .
-claude-tracker setup
-claude-tracker sync --verbose
-claude-tracker install-service  # auto-sync every 15min
+claude-telemetry setup
+claude-telemetry sync --verbose
+claude-telemetry install-service  # auto-sync every 15min
 ```
 
 ## Architecture
@@ -110,19 +110,19 @@ claude-tracker install-service  # auto-sync every 15min
 
 | Command | Description |
 |---|---|
-| `claude-tracker setup` | Configure agent (interactive or `--non-interactive`) |
-| `claude-tracker sync` | Manual sync to Supabase |
-| `claude-tracker sync --verbose` | Sync with detailed output |
-| `claude-tracker sync --force` | Re-sync all data |
-| `claude-tracker daemon` | Run auto-sync in foreground |
-| `claude-tracker daemon --interval 10` | Custom interval (minutes) |
-| `claude-tracker install-service` | Install as system service |
-| `claude-tracker uninstall-service` | Remove system service |
-| `claude-tracker service-status` | Check daemon status |
-| `claude-tracker status` | Show config and last sync |
-| `claude-tracker local --daily` | View local data without syncing |
-| `claude-tracker setup-statusline` | Configure rate limit tracking |
-| `claude-tracker uninstall` | Remove agent config from this machine |
+| `claude-telemetry setup` | Configure agent (interactive or `--non-interactive`) |
+| `claude-telemetry sync` | Manual sync to Supabase |
+| `claude-telemetry sync --verbose` | Sync with detailed output |
+| `claude-telemetry sync --force` | Re-sync all data |
+| `claude-telemetry daemon` | Run auto-sync in foreground |
+| `claude-telemetry daemon --interval 10` | Custom interval (minutes) |
+| `claude-telemetry install-service` | Install as system service |
+| `claude-telemetry uninstall-service` | Remove system service |
+| `claude-telemetry service-status` | Check daemon status |
+| `claude-telemetry status` | Show config and last sync |
+| `claude-telemetry local --daily` | View local data without syncing |
+| `claude-telemetry setup-statusline` | Configure rate limit tracking |
+| `claude-telemetry uninstall` | Remove agent config from this machine |
 
 ## Security
 
@@ -132,7 +132,7 @@ claude-tracker install-service  # auto-sync every 15min
   # value: "you@email.com" or "you@email.com,teammate@email.com"
   ```
 - **API proxy**: All Supabase keys are server-side only (Cloudflare Workers). Zero secrets in the browser bundle.
-- **Agent auth**: Each machine uses a unique API key stored locally in `~/.claude-tracker/config.json`.
+- **Agent auth**: Each machine uses a unique API key stored locally in `~/.claude-telemetry/config.json`.
 - **RLS**: Row-Level Security ensures each user only sees their own machines and data.
 
 ## Uninstall
@@ -143,17 +143,17 @@ To completely remove claude-telemetry from all services:
 
 ```bash
 # Stop and remove the service
-claude-tracker uninstall-service
+claude-telemetry uninstall-service
 
 # Remove config and data
-claude-tracker uninstall
+claude-telemetry uninstall
 
 # Or manually:
-# Windows: rd /s /q %USERPROFILE%\.claude-tracker
-# Linux/macOS: rm -rf ~/.claude-tracker
+# Windows: rd /s /q %USERPROFILE%\.claude-telemetry
+# Linux/macOS: rm -rf ~/.claude-telemetry
 
 # Remove the package
-pip uninstall claude-usage-tracker
+pip uninstall claude-telemetry
 # Delete the repo folder
 ```
 

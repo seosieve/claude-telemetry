@@ -188,7 +188,7 @@ export function Overview() {
             ))}
             {machines.length === 0 && !loading && (
               <p className="col-span-2 text-xs text-slate-600">
-                No machines registered yet. Run `claude-tracker setup` on your PCs.
+                No machines registered yet. Run `claude-telemetry setup` on your PCs.
               </p>
             )}
           </div>

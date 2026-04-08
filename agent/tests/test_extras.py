@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from claude_tracker.extras import read_stats_cache, read_history_index
+from claude_telemetry.extras import read_stats_cache, read_history_index
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

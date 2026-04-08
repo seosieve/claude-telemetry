@@ -17,10 +17,12 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   const email = body.email.trim().toLowerCase();
 
   // Check if email is authorized
-  const allowedEmails = context.env.ALLOWED_EMAILS
-    ?.split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean) || [];
+  const rawAllowed = context.env.ALLOWED_EMAILS || "";
+  const allowedEmails = rawAllowed
+    .split(",")
+    .map((e) => e.trim().toLowerCase().replace(/["\r\n]/g, ""))
+    .filter(Boolean);
+
 
   if (allowedEmails.length > 0 && !allowedEmails.includes(email)) {
     return new Response(

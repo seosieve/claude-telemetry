@@ -12,7 +12,7 @@ from supabase import create_client, Client
 from .config import load_config, update_last_sync, get_last_sync
 from .models import DailyUsage, SessionUsage, RateLimit, StatsExtra, BlockUsage, SyncResult
 
-logger = logging.getLogger("claude-tracker")
+logger = logging.getLogger("claude-telemetry")
 
 
 def _get_client(config: dict[str, Any]) -> Client:

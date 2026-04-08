@@ -16,7 +16,7 @@ from .extras import read_stats_cache
 
 LOG_FILE = CONFIG_DIR / "daemon.log"
 
-logger = logging.getLogger("claude-tracker-daemon")
+logger = logging.getLogger("claude-telemetry-daemon")
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -107,6 +107,17 @@ def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
 
     config = load_config()
     machine_name = config.get("machine_name", "unknown")
+
+    # If hooks are configured, use 60-minute backup interval
+    if config.get("features", {}).get("hooks_configured"):
+        effective_interval = max(interval_minutes, 60)
+        if effective_interval != interval_minutes:
+            logger.info(
+                "Hooks detected — using %dm backup interval (was %dm)",
+                effective_interval, interval_minutes,
+            )
+            interval_minutes = effective_interval
+
     logger.info(
         "Daemon starting: machine=%s interval=%dm",
         machine_name, interval_minutes,

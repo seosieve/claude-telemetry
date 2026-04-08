@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from claude_tracker.collector import (
+from claude_telemetry.collector import (
     collect_daily_usage,
     collect_session_usage,
     collect_rate_limits,
@@ -23,7 +23,7 @@ def _load_fixture(name: str) -> str:
 
 
 class TestCollectDailyUsage:
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_parses_daily_instances(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("daily_instances.json")
 
@@ -44,7 +44,7 @@ class TestCollectDailyUsage:
         assert len(opus) == 1
         assert opus[0].cost_usd == 3.1182
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_paperclip_grouped_as_project(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("daily_instances.json")
 
@@ -53,7 +53,7 @@ class TestCollectDailyUsage:
         assert len(paperclip) == 1
         assert paperclip[0].cost_usd == 0.25
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_passes_since_flag(self, mock_run: MagicMock) -> None:
         mock_run.return_value = '{"projects": {}}'
 
@@ -63,7 +63,7 @@ class TestCollectDailyUsage:
         assert "--since" in call_args
         assert "20260401" in call_args
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_calculates_total_tokens(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("daily_instances.json")
 
@@ -72,7 +72,7 @@ class TestCollectDailyUsage:
             expected = r.input_tokens + r.output_tokens + r.cache_creation_tokens + r.cache_read_tokens
             assert r.total_tokens == expected
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_raises_on_command_failure(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = CollectorError("ccusage daily failed")
 
@@ -81,7 +81,7 @@ class TestCollectDailyUsage:
 
 
 class TestCollectSessionUsage:
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_parses_sessions(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("session_output.json")
 
@@ -93,7 +93,7 @@ class TestCollectSessionUsage:
         assert records[0].cost_usd == 4.5
         assert records[0].models == ["claude-opus-4-6", "claude-sonnet-4-6"]
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_detects_subagent(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("session_output.json")
 
@@ -105,7 +105,7 @@ class TestCollectSessionUsage:
         assert paperclip.is_subagent is True
         assert paperclip.project == "Paperclip"
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_preserves_last_activity(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("session_output.json")
 
@@ -114,22 +114,22 @@ class TestCollectSessionUsage:
 
 
 class TestCollectRateLimits:
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_returns_none_when_not_installed(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = FileNotFoundError
 
         result = collect_rate_limits()
         assert result is None
 
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._run_command")
     def test_returns_none_on_error(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = CollectorError("ccost failed")
 
         result = collect_rate_limits()
         assert result is None
 
-    @patch("claude_tracker.collector._find_ccost", return_value="ccost")
-    @patch("claude_tracker.collector._run_command")
+    @patch("claude_telemetry.collector._find_ccost", return_value="ccost")
+    @patch("claude_telemetry.collector._run_command")
     def test_parses_rate_limit_data(self, mock_run: MagicMock, _mock_find: MagicMock) -> None:
         mock_run.return_value = json.dumps([{
             "timestamp": "2026-04-01T10:00:00Z",

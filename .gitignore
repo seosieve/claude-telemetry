@@ -38,3 +38,4 @@ desktop.ini
 
 # Claude Code
 .claude/
+claude-telemetry-v*.md

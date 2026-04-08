@@ -246,7 +246,7 @@ export function Blocks() {
 
         {blocks.filter((b) => !b.is_gap).length === 0 && !loading && (
           <div className="p-6 text-center text-xs text-slate-500">
-            No blocks found. Run <code className="text-slate-400">claude-tracker sync</code> to fetch block data.
+            No blocks found. Run <code className="text-slate-400">claude-telemetry sync</code> to fetch block data.
           </div>
         )}
       </div>

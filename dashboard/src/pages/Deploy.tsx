@@ -38,9 +38,9 @@ function getCommands(
   const cdSep = isWin ? "\\" : "/";
 
   const setupCmd = isWin
-    ? `claude-tracker setup --non-interactive --name "${machineName}" --supabase-url "${config.supabase_url}" --supabase-key "PASTE_YOUR_KEY_HERE" --machine-id "${config.machine_id}"`
+    ? `claude-telemetry setup --non-interactive --name "${machineName}" --supabase-url "${config.supabase_url}" --supabase-key "PASTE_YOUR_KEY_HERE" --machine-id "${config.machine_id}"`
     : [
-        `claude-tracker setup --non-interactive \\`,
+        `claude-telemetry setup --non-interactive \\`,
         `  --name "${machineName}" \\`,
         `  --supabase-url "${config.supabase_url}" \\`,
         `  --supabase-key "PASTE_YOUR_KEY_HERE" \\`,
@@ -76,7 +76,7 @@ function getCommands(
     {
       step: "3",
       label: "Start agent service",
-      code: [activateCmd, "claude-tracker install-service"].join("\n"),
+      code: [activateCmd, "claude-telemetry install-service"].join("\n"),
       warning: isWin
         ? "Run PowerShell as Administrator (right-click \u2192 Run as Administrator)"
         : undefined,
@@ -86,15 +86,22 @@ function getCommands(
       label: "Verify",
       code: [
         activateCmd,
-        "claude-tracker service-status",
-        "claude-tracker sync --verbose",
+        "claude-telemetry service-status",
+        "claude-telemetry sync --verbose",
       ].join("\n"),
     },
     {
       step: "5",
       label: "Enable rate limit tracking (optional)",
-      code: [activateCmd, "claude-tracker setup-statusline"].join("\n"),
+      code: [activateCmd, "claude-telemetry setup-statusline"].join("\n"),
       warning: "This enables 5-hour and weekly rate limit % tracking in the dashboard.",
+    },
+    {
+      step: "6",
+      label: "Enable real-time sync (recommended)",
+      code: [activateCmd, "claude-telemetry setup-hooks"].join("\n"),
+      warning:
+        "Replaces 15-minute polling with instant sync on session end. The daemon becomes a 60-minute backup.",
     },
   ];
 }

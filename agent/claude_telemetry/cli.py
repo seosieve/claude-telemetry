@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import click
@@ -29,11 +30,69 @@ from .collector import collect_daily_usage, collect_session_usage, collect_rate_
 from .extras import read_stats_cache, read_history_index
 
 
+def _migrate_legacy_config() -> None:
+    """Migrate from claude_tracker → claude_telemetry naming automatically."""
+    legacy_dir = Path.home() / ".claude-tracker"
+    new_dir = Path.home() / ".claude-telemetry"
+
+    # 1. Move config directory
+    if legacy_dir.exists() and not new_dir.exists():
+        import shutil as _shutil
+        _shutil.move(str(legacy_dir), str(new_dir))
+        click.echo(f"Migrated config: {legacy_dir} → {new_dir}")
+
+    # 2. Update hooks in ~/.claude/settings.json
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            raw = json.dumps(data)
+            if "claude_tracker" in raw:
+                updated = raw.replace("claude_tracker", "claude_telemetry")
+                settings_path.write_text(
+                    json.dumps(json.loads(updated), indent=2), encoding="utf-8"
+                )
+                click.echo(f"Migrated hooks in {settings_path}")
+        except Exception:
+            pass
+
+    # 3. Update MCP server in ~/.claude.json
+    claude_json = Path.home() / ".claude.json"
+    if claude_json.exists():
+        try:
+            data = json.loads(claude_json.read_text(encoding="utf-8"))
+            raw = json.dumps(data)
+            if "claude_tracker" in raw:
+                updated = raw.replace("claude_tracker", "claude_telemetry")
+                claude_json.write_text(
+                    json.dumps(json.loads(updated), indent=2), encoding="utf-8"
+                )
+                click.echo(f"Migrated MCP config in {claude_json}")
+        except Exception:
+            pass
+
+    # 4. Update hook scripts (.ps1 / .sh) that still reference claude_tracker
+    claude_dir = Path.home() / ".claude"
+    for script_name in ("hook-session-sync.ps1", "hook-session-sync.sh"):
+        script = claude_dir / script_name
+        if script.exists():
+            try:
+                content = script.read_text(encoding="utf-8")
+                if "claude_tracker" in content:
+                    script.write_text(
+                        content.replace("claude_tracker", "claude_telemetry"),
+                        encoding="utf-8",
+                    )
+                    click.echo(f"Migrated hook script: {script}")
+            except Exception:
+                pass
+
+
 @click.group()
 @click.version_option(version=__version__)
 def main() -> None:
-    """Claude Usage Tracker — centralized token usage tracking for Claude Code."""
-    pass
+    """Claude Telemetry — centralized token usage tracking for Claude Code."""
+    _migrate_legacy_config()
 
 
 # ---------------------------------------------------------------------------
@@ -170,11 +229,11 @@ def setup(
         click.echo(f"Machine registered in Supabase: {config['machine_name']}")
     except Exception as e:
         click.echo(f"WARNING: Could not register machine in Supabase: {e}")
-        click.echo("You can retry with 'claude-tracker sync' after fixing the connection.")
+        click.echo("You can retry with 'claude-telemetry sync' after fixing the connection.")
 
     click.echo(f"\nMachine ID: {config['machine_id']}")
     click.echo(f"API Key:    {config['api_key'][:10]}...{config['api_key'][-4:]}")
-    click.echo("\nSetup complete! Run 'claude-tracker sync' to start syncing.")
+    click.echo("\nSetup complete! Run 'claude-telemetry sync' to start syncing.")
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +376,7 @@ def _get_pythonw() -> str:
 def _start_background_daemon(interval: int, verbose: bool) -> None:
     """Start daemon as a detached background process."""
     exe = _get_pythonw() if sys.platform == "win32" else sys.executable
-    args = [exe, "-m", "claude_tracker.daemon", str(interval)]
+    args = [exe, "-m", "claude_telemetry.daemon", str(interval)]
     if verbose:
         args.append("--verbose")
 
@@ -351,7 +410,7 @@ def _start_background_daemon(interval: int, verbose: bool) -> None:
 def install_service() -> None:
     """Install daemon as a system service (Task Scheduler / systemd / launchd)."""
     system = platform.system()
-    tracker_path = shutil.which("claude-tracker") or f"{sys.executable} -m claude_tracker.cli"
+    tracker_path = shutil.which("claude-telemetry") or f"{sys.executable} -m claude_telemetry.cli"
 
     if system == "Windows":
         _install_windows_service(tracker_path)
@@ -377,10 +436,10 @@ def uninstall_service() -> None:
 @main.command()
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 def uninstall(yes: bool) -> None:
-    """Remove all claude-tracker config from this machine."""
+    """Remove all claude-telemetry config from this machine."""
     if not yes:
         click.confirm(
-            "This will remove all claude-tracker config from this machine. "
+            "This will remove all claude-telemetry config from this machine. "
             "Data in Supabase is NOT affected. Continue?",
             default=False,
             abort=True,
@@ -462,6 +521,188 @@ def setup_statusline() -> None:
     click.echo("\nStatusline configured! Rate limit tracking will start on next Claude Code session.")
 
 
+@main.command("setup-hooks")
+def setup_hooks() -> None:
+    """Configure Claude Code hooks for real-time data sync on session end."""
+    claude_dir = Path.home() / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    system = platform.system()
+
+    # Determine Python path (use pythonw on Windows for windowless execution)
+    python_path = sys.executable
+    if system == "Windows":
+        pythonw = Path(sys.executable).parent / "pythonw.exe"
+        if pythonw.exists():
+            python_path = str(pythonw)
+
+    if system == "Windows":
+        script_path = claude_dir / "hook-session-sync.ps1"
+        script_path.write_text(textwrap.dedent(f"""\
+            Start-Process -FilePath "{python_path}" -ArgumentList "-m","claude_telemetry.hook_sync" -WindowStyle Hidden
+        """))
+        click.echo(f"Created {script_path}")
+    else:
+        script_path = claude_dir / "hook-session-sync.sh"
+        script_path.write_text(textwrap.dedent(f"""\
+            #!/bin/bash
+            nohup "{python_path}" -m claude_telemetry.hook_sync > /dev/null 2>&1 &
+            disown
+        """))
+        script_path.chmod(0o755)
+        click.echo(f"Created {script_path}")
+
+    # Update ~/.claude/settings.json — merge, don't overwrite existing hooks
+    settings_path = claude_dir / "settings.json"
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except Exception:
+            pass
+
+    settings.setdefault("hooks", {})
+    hook_entry = {"hooks": [{"type": "command", "command": str(script_path)}]}
+
+    # SessionEnd — fires once when session ends (primary, guarantees final sync)
+    settings["hooks"]["SessionEnd"] = [hook_entry]
+    # Stop — fires after each response (secondary, incremental updates with debounce)
+    settings["hooks"]["Stop"] = [hook_entry]
+
+    settings_path.write_text(json.dumps(settings, indent=2))
+    click.echo(f"Updated {settings_path}")
+
+    # Mark hooks as configured in agent config
+    try:
+        config = load_config()
+        config.setdefault("features", {})
+        config["features"]["hooks_configured"] = True
+        save_config(config)
+    except FileNotFoundError:
+        click.echo("WARNING: Agent not configured yet. Run 'claude-telemetry setup' first.")
+
+    click.echo("\nHooks configured!")
+    click.echo("  SessionEnd — syncs data when session ends")
+    click.echo("  Stop       — incremental updates (debounced, max 1 per 2 min)")
+    click.echo("The daemon (if running) will switch to a 60-minute backup interval.")
+
+
+@main.command("hook-status")
+def hook_status() -> None:
+    """Show hook configuration status and recent sync info."""
+    claude_dir = Path.home() / ".claude"
+    settings_path = claude_dir / "settings.json"
+
+    # Check if hooks are configured in settings.json
+    session_end_ok = False
+    stop_ok = False
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+            hooks = settings.get("hooks", {})
+            for event_name, entries in [("SessionEnd", hooks.get("SessionEnd", [])), ("Stop", hooks.get("Stop", []))]:
+                for entry in entries:
+                    # Check nested hooks format
+                    inner = entry.get("hooks", [entry])
+                    for h in inner:
+                        if "hook-session-sync" in h.get("command", ""):
+                            if event_name == "SessionEnd":
+                                session_end_ok = True
+                            else:
+                                stop_ok = True
+        except Exception:
+            pass
+
+    click.echo(f"SessionEnd hook:  {'YES' if session_end_ok else 'NO'}")
+    click.echo(f"Stop hook:        {'YES' if stop_ok else 'NO'}")
+
+    # Check lock file for last sync time
+    lock_file = CONFIG_DIR / ".hook_lock"
+    if lock_file.exists():
+        import datetime
+        mtime = lock_file.stat().st_mtime
+        last_sync = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+        ago = int(time.time() - mtime)
+        if ago < 60:
+            ago_str = f"{ago}s ago"
+        elif ago < 3600:
+            ago_str = f"{ago // 60}m ago"
+        else:
+            ago_str = f"{ago // 3600}h ago"
+        click.echo(f"Last hook sync:   {last_sync} ({ago_str})")
+    else:
+        click.echo("Last hook sync:   never")
+
+    # Show recent log entries
+    log_file = CONFIG_DIR / "logs" / "hooks.log"
+    if log_file.exists():
+        lines = log_file.read_text().strip().splitlines()
+        recent = lines[-5:] if len(lines) > 5 else lines
+        click.echo(f"\nRecent log ({log_file}):")
+        for line in recent:
+            click.echo(f"  {line}")
+    else:
+        click.echo(f"\nNo hook log yet ({log_file})")
+
+
+@main.command("setup-mcp")
+def setup_mcp() -> None:
+    """Register the claude-telemetry MCP server with Claude Code.
+
+    Allows you to query usage data directly from Claude Code:
+      "How much did I spend this week?"
+      "What's my most expensive project?"
+    """
+    # Check that agent is configured
+    try:
+        load_config()
+    except FileNotFoundError:
+        click.echo("ERROR: Agent not configured. Run 'claude-telemetry setup' first.")
+        raise SystemExit(1)
+
+    # Determine Python path (same venv that has claude_telemetry installed)
+    python_path = sys.executable
+
+    # MCP servers go in ~/.claude.json (NOT ~/.claude/settings.json)
+    config_path = Path.home() / ".claude.json"
+
+    config_data: dict = {}
+    if config_path.exists():
+        try:
+            config_data = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # Add MCP server entry — preserve all other fields
+    config_data.setdefault("mcpServers", {})
+    config_data["mcpServers"]["claude-telemetry"] = {
+        "command": python_path,
+        "args": ["-m", "claude_telemetry.mcp_server"],
+    }
+
+    config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+    click.echo(f"Updated {config_path}")
+
+    # Clean up stale entry from settings.json (old location)
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            if "mcpServers" in settings and "claude-telemetry" in settings["mcpServers"]:
+                del settings["mcpServers"]["claude-telemetry"]
+                if not settings["mcpServers"]:
+                    del settings["mcpServers"]
+                settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+                click.echo(f"Cleaned stale entry from {settings_path}")
+        except Exception:
+            pass
+    click.echo("\nMCP server registered: claude-telemetry")
+    click.echo("\nYou can now ask Claude Code things like:")
+    click.echo('  "How much did I spend this week across all machines?"')
+    click.echo('  "What are my top 5 projects by cost?"')
+    click.echo('  "Show me the rate limit status"')
+    click.echo("\nRestart Claude Code to activate the MCP server.")
+
+
 @main.command("service-status")
 def service_status() -> None:
     """Show daemon service status."""
@@ -479,10 +720,10 @@ def service_status() -> None:
             click.echo("Service: NOT INSTALLED")
 
     elif system == "Darwin":
-        plist = Path.home() / "Library/LaunchAgents/com.claude-tracker.plist"
+        plist = Path.home() / "Library/LaunchAgents/com.claude-telemetry.plist"
         if plist.exists():
             result = subprocess.run(
-                ["launchctl", "list", "com.claude-tracker"],
+                ["launchctl", "list", "com.claude-telemetry"],
                 capture_output=True, text=True,
             )
             if result.returncode == 0:
@@ -495,14 +736,14 @@ def service_status() -> None:
 
     else:
         result = subprocess.run(
-            ["systemctl", "--user", "is-active", "claude-tracker"],
+            ["systemctl", "--user", "is-active", "claude-telemetry"],
             capture_output=True, text=True,
         )
         status = result.stdout.strip()
         click.echo(f"Service: {status.upper()} (systemd)")
         if status == "active":
             subprocess.run(
-                ["systemctl", "--user", "status", "claude-tracker", "--no-pager"],
+                ["systemctl", "--user", "status", "claude-telemetry", "--no-pager"],
             )
 
     # Show last sync info
@@ -516,14 +757,14 @@ def service_status() -> None:
         if log_file.exists():
             click.echo(f"\nLog file: {log_file}")
     except FileNotFoundError:
-        click.echo("\nNot configured. Run 'claude-tracker setup' first.")
+        click.echo("\nNot configured. Run 'claude-telemetry setup' first.")
 
 
 # --- Windows Task Scheduler ---
 
 def _install_windows_service(tracker_path: str) -> None:
     exe = _get_pythonw()
-    cmd_line = f'"{exe}" -m claude_tracker.daemon 15'
+    cmd_line = f'"{exe}" -m claude_telemetry.daemon 15'
     result = subprocess.run(
         [
             "schtasks", "/Create",
@@ -558,7 +799,7 @@ def _uninstall_windows_service() -> None:
 def _install_macos_service(tracker_path: str) -> None:
     plist_dir = Path.home() / "Library/LaunchAgents"
     plist_dir.mkdir(parents=True, exist_ok=True)
-    plist_path = plist_dir / "com.claude-tracker.plist"
+    plist_path = plist_dir / "com.claude-telemetry.plist"
 
     plist_content = textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
@@ -567,12 +808,12 @@ def _install_macos_service(tracker_path: str) -> None:
         <plist version="1.0">
         <dict>
             <key>Label</key>
-            <string>com.claude-tracker</string>
+            <string>com.claude-telemetry</string>
             <key>ProgramArguments</key>
             <array>
                 <string>{sys.executable}</string>
                 <string>-m</string>
-                <string>claude_tracker.daemon</string>
+                <string>claude_telemetry.daemon</string>
                 <string>15</string>
             </array>
             <key>RunAtLoad</key>
@@ -593,7 +834,7 @@ def _install_macos_service(tracker_path: str) -> None:
 
 
 def _uninstall_macos_service() -> None:
-    plist_path = Path.home() / "Library/LaunchAgents/com.claude-tracker.plist"
+    plist_path = Path.home() / "Library/LaunchAgents/com.claude-telemetry.plist"
     if plist_path.exists():
         subprocess.run(["launchctl", "unload", str(plist_path)])
         plist_path.unlink()
@@ -607,7 +848,7 @@ def _uninstall_macos_service() -> None:
 def _install_linux_service(tracker_path: str) -> None:
     service_dir = Path.home() / ".config/systemd/user"
     service_dir.mkdir(parents=True, exist_ok=True)
-    service_path = service_dir / "claude-tracker.service"
+    service_path = service_dir / "claude-telemetry.service"
 
     service_content = textwrap.dedent(f"""\
         [Unit]
@@ -616,7 +857,7 @@ def _install_linux_service(tracker_path: str) -> None:
 
         [Service]
         Type=simple
-        ExecStart={sys.executable} -m claude_tracker.daemon 15
+        ExecStart={sys.executable} -m claude_telemetry.daemon 15
         Restart=on-failure
         RestartSec=30
 
@@ -625,14 +866,14 @@ def _install_linux_service(tracker_path: str) -> None:
     """)
     service_path.write_text(service_content)
     subprocess.run(["systemctl", "--user", "daemon-reload"])
-    subprocess.run(["systemctl", "--user", "enable", "--now", "claude-tracker"])
+    subprocess.run(["systemctl", "--user", "enable", "--now", "claude-telemetry"])
     click.echo(f"systemd service installed: {service_path}")
     click.echo("Daemon started and enabled on login.")
 
 
 def _uninstall_linux_service() -> None:
-    subprocess.run(["systemctl", "--user", "disable", "--now", "claude-tracker"])
-    service_path = Path.home() / ".config/systemd/user/claude-tracker.service"
+    subprocess.run(["systemctl", "--user", "disable", "--now", "claude-telemetry"])
+    service_path = Path.home() / ".config/systemd/user/claude-telemetry.service"
     if service_path.exists():
         service_path.unlink()
         subprocess.run(["systemctl", "--user", "daemon-reload"])
@@ -650,7 +891,7 @@ def status() -> None:
     try:
         config = load_config()
     except FileNotFoundError:
-        click.echo("Not configured. Run 'claude-tracker setup' first.")
+        click.echo("Not configured. Run 'claude-telemetry setup' first.")
         return
 
     click.echo(f"Machine:     {config.get('machine_name', 'unknown')}")

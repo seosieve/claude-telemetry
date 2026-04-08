@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-usage-tracker"
-version = "0.1.0"
+name = "claude-telemetry"
+version = "0.3.0"
 description = "Lightweight agent for centralized Claude Code token usage tracking"
 readme = "README.md"
 license = {text = "MIT"}
@@ -16,6 +16,7 @@ dependencies = [
     "supabase>=2.0",
     "click>=8.1",
     "python-dateutil>=2.9",
+    "mcp>=1.0",
 ]
 
 [project.urls]
@@ -23,7 +24,7 @@ Repository = "https://github.com/RyanTech00/claude-telemetry"
 Issues = "https://github.com/RyanTech00/claude-telemetry/issues"
 
 [project.scripts]
-claude-tracker = "claude_tracker.cli:main"
+claude-telemetry = "claude_telemetry.cli:main"
 
 [project.optional-dependencies]
 dev = [
