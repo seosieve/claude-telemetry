@@ -82,9 +82,9 @@ cd claude-telemetry/agent
 python3 -m venv venv
 source venv/bin/activate  # Windows: .\venv\Scripts\Activate
 pip install -e .
-claude-telemetry setup
-claude-telemetry sync --verbose
-claude-telemetry install-service  # auto-sync every 15min
+cc-telemetry setup
+cc-telemetry sync --verbose
+cc-telemetry install-service  # auto-sync every 15min
 ```
 
 ## Architecture
@@ -110,19 +110,21 @@ claude-telemetry install-service  # auto-sync every 15min
 
 | Command | Description |
 |---|---|
-| `claude-telemetry setup` | Configure agent (interactive or `--non-interactive`) |
-| `claude-telemetry sync` | Manual sync to Supabase |
-| `claude-telemetry sync --verbose` | Sync with detailed output |
-| `claude-telemetry sync --force` | Re-sync all data |
-| `claude-telemetry daemon` | Run auto-sync in foreground |
-| `claude-telemetry daemon --interval 10` | Custom interval (minutes) |
-| `claude-telemetry install-service` | Install as system service |
-| `claude-telemetry uninstall-service` | Remove system service |
-| `claude-telemetry service-status` | Check daemon status |
-| `claude-telemetry status` | Show config and last sync |
-| `claude-telemetry local --daily` | View local data without syncing |
-| `claude-telemetry setup-statusline` | Configure rate limit tracking |
-| `claude-telemetry uninstall` | Remove agent config from this machine |
+| `cc-telemetry setup` | Setup wizard — configure everything in one command |
+| `cc-telemetry doctor` | Health check — verify all components |
+| `cc-telemetry sync` | Manual sync to Supabase |
+| `cc-telemetry sync --verbose` | Sync with detailed output |
+| `cc-telemetry sync --force` | Re-sync all data |
+| `cc-telemetry daemon` | Run auto-sync in foreground |
+| `cc-telemetry install-service` | Install as system service |
+| `cc-telemetry uninstall-service` | Remove system service |
+| `cc-telemetry service-status` | Check daemon status |
+| `cc-telemetry status` | Show config and last sync |
+| `cc-telemetry local --daily` | View local data without syncing |
+| `cc-telemetry setup-hooks` | Configure real-time sync hooks |
+| `cc-telemetry setup-mcp` | Register MCP server with Claude Code |
+| `cc-telemetry setup-statusline` | Configure rate limit tracking |
+| `cc-telemetry uninstall` | Remove agent config from this machine |
 
 ## Security
 
@@ -143,17 +145,17 @@ To completely remove claude-telemetry from all services:
 
 ```bash
 # Stop and remove the service
-claude-telemetry uninstall-service
+cc-telemetry uninstall-service
 
 # Remove config and data
-claude-telemetry uninstall
+cc-telemetry uninstall
 
 # Or manually:
 # Windows: rd /s /q %USERPROFILE%\.claude-telemetry
 # Linux/macOS: rm -rf ~/.claude-telemetry
 
 # Remove the package
-pip uninstall claude-telemetry
+pip uninstall cc-telemetry
 # Delete the repo folder
 ```
 

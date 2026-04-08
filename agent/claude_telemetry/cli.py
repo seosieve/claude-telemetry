@@ -87,6 +87,18 @@ def _migrate_legacy_config() -> None:
             except Exception:
                 pass
 
+    # 5. Rename MCP server key from "claude-telemetry" → "cc-telemetry" in ~/.claude.json
+    if claude_json.exists():
+        try:
+            data = json.loads(claude_json.read_text(encoding="utf-8"))
+            servers = data.get("mcpServers", {})
+            if "claude-telemetry" in servers and "cc-telemetry" not in servers:
+                servers["cc-telemetry"] = servers.pop("claude-telemetry")
+                claude_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                click.echo(f"Migrated MCP key: claude-telemetry → cc-telemetry")
+        except Exception:
+            pass
+
 
 @click.group()
 @click.version_option(version=__version__)
@@ -260,7 +272,7 @@ def setup(
         click.echo(f"Machine registered: {config['machine_name']}")
     except Exception as e:
         click.echo(f"WARNING: Could not register machine: {e}")
-        click.echo("You can retry with 'claude-telemetry sync' after fixing the connection.")
+        click.echo("You can retry with 'cc-telemetry sync' after fixing the connection.")
 
     # --- Step 5: Full setup (unless --minimal) ---
     auto_configure = not minimal
@@ -304,7 +316,7 @@ def setup(
         # Install service
         try:
             system = platform.system()
-            tracker_path = shutil.which("claude-telemetry") or f"{sys.executable} -m claude_telemetry.cli"
+            tracker_path = shutil.which("cc-telemetry") or f"{sys.executable} -m claude_telemetry.cli"
             if system == "Windows":
                 _install_windows_service(tracker_path)
             elif system == "Darwin":
@@ -336,13 +348,13 @@ def setup(
         click.echo(f"Enabled:  {', '.join(configured)}")
     click.echo()
     if auto_configure:
-        click.echo("Everything is configured! Run 'claude-telemetry doctor' to verify.")
+        click.echo("Everything is configured! Run 'cc-telemetry doctor' to verify.")
     else:
         click.echo("Base config saved. Run individual commands to enable more features:")
-        click.echo("  claude-telemetry setup-hooks        # real-time sync")
-        click.echo("  claude-telemetry setup-mcp          # Claude Code MCP integration")
-        click.echo("  claude-telemetry setup-statusline   # rate limit tracking")
-        click.echo("  claude-telemetry install-service    # background daemon")
+        click.echo("  cc-telemetry setup-hooks        # real-time sync")
+        click.echo("  cc-telemetry setup-mcp          # Claude Code MCP integration")
+        click.echo("  cc-telemetry setup-statusline   # rate limit tracking")
+        click.echo("  cc-telemetry install-service    # background daemon")
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +531,7 @@ def _start_background_daemon(interval: int, verbose: bool) -> None:
 def install_service() -> None:
     """Install daemon as a system service (Task Scheduler / systemd / launchd)."""
     system = platform.system()
-    tracker_path = shutil.which("claude-telemetry") or f"{sys.executable} -m claude_telemetry.cli"
+    tracker_path = shutil.which("cc-telemetry") or f"{sys.executable} -m claude_telemetry.cli"
 
     if system == "Windows":
         _install_windows_service(tracker_path)
@@ -545,10 +557,10 @@ def uninstall_service() -> None:
 @main.command()
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 def uninstall(yes: bool) -> None:
-    """Remove all claude-telemetry config from this machine."""
+    """Remove all cc-telemetry config from this machine."""
     if not yes:
         click.confirm(
-            "This will remove all claude-telemetry config from this machine. "
+            "This will remove all cc-telemetry config from this machine. "
             "Data in Supabase is NOT affected. Continue?",
             default=False,
             abort=True,
@@ -668,7 +680,7 @@ def _setup_mcp_internal() -> None:
             pass
 
     config_data.setdefault("mcpServers", {})
-    config_data["mcpServers"]["claude-telemetry"] = {
+    config_data["mcpServers"]["cc-telemetry"] = {
         "command": python_path,
         "args": ["-m", "claude_telemetry.mcp_server"],
     }
@@ -692,7 +704,7 @@ def setup_hooks() -> None:
         config["features"]["hooks_configured"] = True
         save_config(config)
     except FileNotFoundError:
-        click.echo("WARNING: Agent not configured yet. Run 'claude-telemetry setup' first.")
+        click.echo("WARNING: Agent not configured yet. Run 'cc-telemetry setup' first.")
     click.echo("Hooks configured! (SessionEnd + Stop)")
     click.echo("The daemon (if running) will switch to a 60-minute backup interval.")
 
@@ -757,15 +769,15 @@ def hook_status() -> None:
 
 @main.command("setup-mcp")
 def setup_mcp() -> None:
-    """Register the claude-telemetry MCP server with Claude Code."""
+    """Register the cc-telemetry MCP server with Claude Code."""
     try:
         load_config()
     except FileNotFoundError:
-        click.echo("ERROR: Agent not configured. Run 'claude-telemetry setup' first.")
+        click.echo("ERROR: Agent not configured. Run 'cc-telemetry setup' first.")
         raise SystemExit(1)
 
     _setup_mcp_internal()
-    click.echo("MCP server registered: claude-telemetry")
+    click.echo("MCP server registered: cc-telemetry")
     click.echo("\nYou can now ask Claude Code things like:")
     click.echo('  "How much did I spend this week across all machines?"')
     click.echo('  "What are my top 5 projects by cost?"')
@@ -815,9 +827,9 @@ def doctor() -> None:
         config_ok = bool(config.get("machine_id") and config.get("supabase_url"))
         name = config.get("machine_name", "?")
         mid = config.get("machine_id", "?")[:8]
-        _check("Config valid", config_ok, f"{name} ({mid}...)", "Run: claude-telemetry setup")
+        _check("Config valid", config_ok, f"{name} ({mid}...)", "Run: cc-telemetry setup")
     except FileNotFoundError:
-        _check("Config valid", False, hint="Run: claude-telemetry setup")
+        _check("Config valid", False, hint="Run: cc-telemetry setup")
         config = {}
 
     # 4. Supabase reachable
@@ -842,7 +854,7 @@ def doctor() -> None:
         except Exception:
             pass
     _check("Statusline configured", statusline_ok,
-           hint="Run: claude-telemetry setup-statusline")
+           hint="Run: cc-telemetry setup-statusline")
 
     # 6. Hooks
     hooks_ok = False
@@ -855,7 +867,7 @@ def doctor() -> None:
             pass
     _check("Hooks configured", hooks_ok,
            "SessionEnd + Stop" if hooks_ok else "",
-           "Run: claude-telemetry setup-hooks")
+           "Run: cc-telemetry setup-hooks")
 
     # 7. MCP server
     mcp_ok = False
@@ -863,11 +875,11 @@ def doctor() -> None:
     if claude_json.exists():
         try:
             d = json.loads(claude_json.read_text(encoding="utf-8"))
-            mcp_ok = "claude-telemetry" in d.get("mcpServers", {})
+            mcp_ok = "cc-telemetry" in d.get("mcpServers", {})
         except Exception:
             pass
     _check("MCP server registered", mcp_ok,
-           hint="Run: claude-telemetry setup-mcp")
+           hint="Run: cc-telemetry setup-mcp")
 
     # 8. Daemon running
     daemon_ok = False
@@ -879,16 +891,16 @@ def doctor() -> None:
         )
         daemon_ok = r.returncode == 0
     elif system == "Darwin":
-        plist = Path.home() / "Library/LaunchAgents/com.claude-telemetry.plist"
+        plist = Path.home() / "Library/LaunchAgents/com.cc-telemetry.plist"
         daemon_ok = plist.exists()
     else:
         r = subprocess.run(
-            ["systemctl", "--user", "is-active", "claude-telemetry"],
+            ["systemctl", "--user", "is-active", "cc-telemetry"],
             capture_output=True, text=True,
         )
         daemon_ok = r.stdout.strip() == "active"
     _check("Daemon running", daemon_ok,
-           hint="Run: claude-telemetry install-service")
+           hint="Run: cc-telemetry install-service")
 
     # 9. Last sync
     sync_ok = False
@@ -898,7 +910,7 @@ def doctor() -> None:
             sync_ok = True
             _check("Last sync", True, last_daily[:19].replace("T", " "))
         else:
-            _check("Last sync", False, hint="Run: claude-telemetry sync")
+            _check("Last sync", False, hint="Run: cc-telemetry sync")
     else:
         _check("Last sync", False, hint="Fix config first")
 
@@ -934,10 +946,10 @@ def service_status() -> None:
             click.echo("Service: NOT INSTALLED")
 
     elif system == "Darwin":
-        plist = Path.home() / "Library/LaunchAgents/com.claude-telemetry.plist"
+        plist = Path.home() / "Library/LaunchAgents/com.cc-telemetry.plist"
         if plist.exists():
             result = subprocess.run(
-                ["launchctl", "list", "com.claude-telemetry"],
+                ["launchctl", "list", "com.cc-telemetry"],
                 capture_output=True, text=True,
             )
             if result.returncode == 0:
@@ -950,14 +962,14 @@ def service_status() -> None:
 
     else:
         result = subprocess.run(
-            ["systemctl", "--user", "is-active", "claude-telemetry"],
+            ["systemctl", "--user", "is-active", "cc-telemetry"],
             capture_output=True, text=True,
         )
         status = result.stdout.strip()
         click.echo(f"Service: {status.upper()} (systemd)")
         if status == "active":
             subprocess.run(
-                ["systemctl", "--user", "status", "claude-telemetry", "--no-pager"],
+                ["systemctl", "--user", "status", "cc-telemetry", "--no-pager"],
             )
 
     # Show last sync info
@@ -971,7 +983,7 @@ def service_status() -> None:
         if log_file.exists():
             click.echo(f"\nLog file: {log_file}")
     except FileNotFoundError:
-        click.echo("\nNot configured. Run 'claude-telemetry setup' first.")
+        click.echo("\nNot configured. Run 'cc-telemetry setup' first.")
 
 
 # --- Windows Task Scheduler ---
@@ -1013,7 +1025,7 @@ def _uninstall_windows_service() -> None:
 def _install_macos_service(tracker_path: str) -> None:
     plist_dir = Path.home() / "Library/LaunchAgents"
     plist_dir.mkdir(parents=True, exist_ok=True)
-    plist_path = plist_dir / "com.claude-telemetry.plist"
+    plist_path = plist_dir / "com.cc-telemetry.plist"
 
     plist_content = textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
@@ -1022,7 +1034,7 @@ def _install_macos_service(tracker_path: str) -> None:
         <plist version="1.0">
         <dict>
             <key>Label</key>
-            <string>com.claude-telemetry</string>
+            <string>com.cc-telemetry</string>
             <key>ProgramArguments</key>
             <array>
                 <string>{sys.executable}</string>
@@ -1048,7 +1060,7 @@ def _install_macos_service(tracker_path: str) -> None:
 
 
 def _uninstall_macos_service() -> None:
-    plist_path = Path.home() / "Library/LaunchAgents/com.claude-telemetry.plist"
+    plist_path = Path.home() / "Library/LaunchAgents/com.cc-telemetry.plist"
     if plist_path.exists():
         subprocess.run(["launchctl", "unload", str(plist_path)])
         plist_path.unlink()
@@ -1062,7 +1074,7 @@ def _uninstall_macos_service() -> None:
 def _install_linux_service(tracker_path: str) -> None:
     service_dir = Path.home() / ".config/systemd/user"
     service_dir.mkdir(parents=True, exist_ok=True)
-    service_path = service_dir / "claude-telemetry.service"
+    service_path = service_dir / "cc-telemetry.service"
 
     service_content = textwrap.dedent(f"""\
         [Unit]
@@ -1080,14 +1092,14 @@ def _install_linux_service(tracker_path: str) -> None:
     """)
     service_path.write_text(service_content)
     subprocess.run(["systemctl", "--user", "daemon-reload"])
-    subprocess.run(["systemctl", "--user", "enable", "--now", "claude-telemetry"])
+    subprocess.run(["systemctl", "--user", "enable", "--now", "cc-telemetry"])
     click.echo(f"systemd service installed: {service_path}")
     click.echo("Daemon started and enabled on login.")
 
 
 def _uninstall_linux_service() -> None:
-    subprocess.run(["systemctl", "--user", "disable", "--now", "claude-telemetry"])
-    service_path = Path.home() / ".config/systemd/user/claude-telemetry.service"
+    subprocess.run(["systemctl", "--user", "disable", "--now", "cc-telemetry"])
+    service_path = Path.home() / ".config/systemd/user/cc-telemetry.service"
     if service_path.exists():
         service_path.unlink()
         subprocess.run(["systemctl", "--user", "daemon-reload"])
@@ -1105,7 +1117,7 @@ def status() -> None:
     try:
         config = load_config()
     except FileNotFoundError:
-        click.echo("Not configured. Run 'claude-telemetry setup' first.")
+        click.echo("Not configured. Run 'cc-telemetry setup' first.")
         return
 
     click.echo(f"Machine:     {config.get('machine_name', 'unknown')}")

@@ -21,10 +21,10 @@ pip install -e .
 
 ```bash
 # Interactive
-claude-telemetry setup
+cc-telemetry setup
 
 # Non-interactive (from Deploy page)
-claude-telemetry setup --non-interactive \
+cc-telemetry setup --non-interactive \
   --name "My PC" \
   --supabase-url "https://xxx.supabase.co" \
   --supabase-key "eyJ..." \
@@ -35,20 +35,20 @@ claude-telemetry setup --non-interactive \
 
 | Command | Description |
 |---|---|
-| `claude-telemetry setup` | Configure agent |
-| `claude-telemetry sync` | Manual sync |
-| `claude-telemetry sync --verbose` | Sync with details |
-| `claude-telemetry sync --force` | Re-sync all data |
-| `claude-telemetry daemon` | Auto-sync foreground |
-| `claude-telemetry daemon --interval 10` | Custom interval |
-| `claude-telemetry daemon --background` | Run detached |
-| `claude-telemetry install-service` | Install as system service |
-| `claude-telemetry uninstall-service` | Remove service |
-| `claude-telemetry service-status` | Check daemon status |
-| `claude-telemetry status` | Show config info |
-| `claude-telemetry local --daily` | View data locally |
-| `claude-telemetry local --sessions` | View sessions locally |
-| `claude-telemetry local --projects` | View project summary |
+| `cc-telemetry setup` | Configure agent |
+| `cc-telemetry sync` | Manual sync |
+| `cc-telemetry sync --verbose` | Sync with details |
+| `cc-telemetry sync --force` | Re-sync all data |
+| `cc-telemetry daemon` | Auto-sync foreground |
+| `cc-telemetry daemon --interval 10` | Custom interval |
+| `cc-telemetry daemon --background` | Run detached |
+| `cc-telemetry install-service` | Install as system service |
+| `cc-telemetry uninstall-service` | Remove service |
+| `cc-telemetry service-status` | Check daemon status |
+| `cc-telemetry status` | Show config info |
+| `cc-telemetry local --daily` | View data locally |
+| `cc-telemetry local --sessions` | View sessions locally |
+| `cc-telemetry local --projects` | View project summary |
 
 ## How It Works
 

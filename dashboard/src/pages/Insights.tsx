@@ -126,7 +126,7 @@ export function Insights() {
     insights.push({
       icon: "\uD83D\uDCA1",
       title: "Enable Rate Limit Tracking",
-      text: "Run claude-telemetry setup-statusline to enable 5-hour and weekly rate limit monitoring.",
+      text: "Run cc-telemetry setup-statusline to enable 5-hour and weekly rate limit monitoring.",
       color: "sky",
     });
   }

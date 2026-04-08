@@ -114,7 +114,7 @@ def main() -> None:
     try:
         config = load_config()
     except FileNotFoundError:
-        logger.warning("Config not found — run 'claude-telemetry setup' first")
+        logger.warning("Config not found — run 'cc-telemetry setup' first")
         return
 
     try:

@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import load_config
 
-mcp = FastMCP("claude-telemetry")
+mcp = FastMCP("cc-telemetry")
 
 
 def _get_client() -> Any:

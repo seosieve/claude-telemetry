@@ -38,9 +38,9 @@ function getCommands(
   const cdSep = isWin ? "\\" : "/";
 
   const setupCmd = isWin
-    ? `claude-telemetry setup --non-interactive --name "${machineName}" --supabase-url "${config.supabase_url}" --supabase-key "PASTE_YOUR_KEY_HERE" --machine-id "${config.machine_id}"`
+    ? `cc-telemetry setup --non-interactive --name "${machineName}" --supabase-url "${config.supabase_url}" --supabase-key "PASTE_YOUR_KEY_HERE" --machine-id "${config.machine_id}"`
     : [
-        `claude-telemetry setup --non-interactive \\`,
+        `cc-telemetry setup --non-interactive \\`,
         `  --name "${machineName}" \\`,
         `  --supabase-url "${config.supabase_url}" \\`,
         `  --supabase-key "PASTE_YOUR_KEY_HERE" \\`,
@@ -69,7 +69,7 @@ function getCommands(
     {
       step: "3",
       label: "Verify installation",
-      code: [activateCmd, "claude-telemetry doctor"].join("\n"),
+      code: [activateCmd, "cc-telemetry doctor"].join("\n"),
       warning: isWin
         ? "Run PowerShell as Administrator if the service check fails."
         : undefined,
