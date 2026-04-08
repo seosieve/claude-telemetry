@@ -78,14 +78,31 @@ npx wrangler pages deploy dist
 ### Step 3 — Agent (each PC)
 
 ```bash
+# Prerequisites
+npm install -g ccusage ccost
+
+# Install
+pip install cc-telemetry
+
+# Setup wizard (configures hooks, MCP, statusline, daemon — all in one)
+cc-telemetry setup
+
+# Verify
+cc-telemetry doctor
+```
+
+<details>
+<summary>Alternative: install from source</summary>
+
+```bash
+git clone https://github.com/RyanTech00/claude-telemetry.git
 cd claude-telemetry/agent
 python3 -m venv venv
 source venv/bin/activate  # Windows: .\venv\Scripts\Activate
 pip install -e .
 cc-telemetry setup
-cc-telemetry sync --verbose
-cc-telemetry install-service  # auto-sync every 15min
 ```
+</details>
 
 ## Architecture
 

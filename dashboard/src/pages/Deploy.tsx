@@ -31,11 +31,6 @@ function getCommands(
   machineName: string,
 ): CommandStep[] {
   const isWin = os === "windows";
-  const activateCmd = isWin
-    ? ".\\venv\\Scripts\\Activate"
-    : "source venv/bin/activate";
-  const pythonCmd = isWin ? "python" : "python3";
-  const cdSep = isWin ? "\\" : "/";
 
   const setupCmd = isWin
     ? `cc-telemetry setup --non-interactive --name "${machineName}" --supabase-url "${config.supabase_url}" --supabase-key "PASTE_YOUR_KEY_HERE" --machine-id "${config.machine_id}"`
@@ -50,26 +45,24 @@ function getCommands(
   return [
     {
       step: "1",
-      label: "Install dependencies",
+      label: "Install",
       code: [
-        "git clone https://github.com/RyanTech00/claude-telemetry.git",
-        `cd claude-telemetry${cdSep}agent`,
-        `${pythonCmd} -m venv venv`,
-        activateCmd,
-        "pip install -e .",
+        "npm install -g ccusage ccost",
+        "pip install cc-telemetry",
       ].join("\n"),
+      warning: "Requires Node.js 18+ and Python 3.11+.",
     },
     {
       step: "2",
       label: "Run setup wizard",
       code: setupCmd,
       warning:
-        "Paste the service key from the previous step. The wizard will configure hooks, MCP server, statusline, and daemon automatically.",
+        "Paste the service key from the previous step. The wizard configures hooks, MCP server, statusline, and daemon automatically.",
     },
     {
       step: "3",
-      label: "Verify installation",
-      code: [activateCmd, "cc-telemetry doctor"].join("\n"),
+      label: "Verify",
+      code: "cc-telemetry doctor",
       warning: isWin
         ? "Run PowerShell as Administrator if the service check fails."
         : undefined,
