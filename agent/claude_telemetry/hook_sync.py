@@ -15,22 +15,18 @@ from pathlib import Path
 from typing import Any
 
 from .config import CONFIG_DIR, load_config
+from .logging_config import get_rotating_handler
 
-LOG_DIR = CONFIG_DIR / "logs"
-LOG_FILE = LOG_DIR / "hooks.log"
 LOCK_FILE = CONFIG_DIR / ".hook_lock"
 MIN_INTERVAL = 120  # seconds — minimum gap between hook syncs
 
 
 def _setup_logging() -> logging.Logger:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("claude-telemetry-hook")
     logger.setLevel(logging.INFO)
     if not logger.handlers:
         try:
-            handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-            logger.addHandler(handler)
+            logger.addHandler(get_rotating_handler("hooks.log"))
         except Exception:
             pass
     return logger

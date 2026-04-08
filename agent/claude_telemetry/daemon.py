@@ -13,29 +13,24 @@ from typing import Any
 from .config import CONFIG_DIR, load_config
 from .collector import collect_daily_usage, collect_session_usage, collect_rate_limits, collect_blocks_usage
 from .extras import read_stats_cache
-
-LOG_FILE = CONFIG_DIR / "daemon.log"
+from .logging_config import get_rotating_handler, LOG_FMT
 
 logger = logging.getLogger("claude-telemetry-daemon")
 
 
 def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
-    fmt = "%(asctime)s [%(levelname)s] %(message)s"
     logger.setLevel(level)
 
     try:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-        file_handler.setFormatter(logging.Formatter(fmt))
-        logger.addHandler(file_handler)
+        logger.addHandler(get_rotating_handler("daemon.log"))
     except Exception:
-        pass  # Can't write log file (e.g. pythonw with no permissions)
+        pass
 
     # Stream handler only if not running windowless (pythonw)
     if sys.executable and not sys.executable.endswith("pythonw.exe"):
         stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(logging.Formatter(fmt))
+        stream_handler.setFormatter(logging.Formatter(LOG_FMT))
         logger.addHandler(stream_handler)
 
 
