@@ -6,7 +6,7 @@
 #
 # What this does:
 #   1. Replaces the upstream cc-telemetry pipx install with the RiceGang fork
-#      (git+https://github.com/seosieve/claude-telemetry@main).
+#      (git+https://github.com/seosieve/claude-telemetry@main#subdirectory=agent).
 #   2. Restarts the cc-telemetry launchd daemon so the new code takes effect.
 #   3. Installs an auto-upgrade LaunchAgent (com.cc-telemetry.auto-upgrade)
 #      that re-runs `pipx install --force` daily at 05:10 and restarts the
@@ -15,7 +15,7 @@
 
 set -eu
 
-FORK_URL="git+https://github.com/seosieve/claude-telemetry@main"
+FORK_URL="git+https://github.com/seosieve/claude-telemetry@main#subdirectory=agent"
 DAEMON_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.plist"
 UPGRADE_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.auto-upgrade.plist"
 UPGRADE_LABEL="com.cc-telemetry.auto-upgrade"
