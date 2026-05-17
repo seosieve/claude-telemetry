@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 from .models import DailyUsage, SessionUsage, RateLimit, BlockUsage
@@ -67,7 +69,10 @@ def collect_daily_usage(since: str | None = None) -> list[DailyUsage]:
     Call `npx ccusage@latest daily --json --instances` and flatten
     the per-project, per-model breakdowns into DailyUsage records.
     """
-    cmd = ["npx", "ccusage@latest", "daily", "--json", "--instances", "--no-color"]
+    # ccusage v2 split the top-level commands into per-agent subcommands; the
+    # old `ccusage daily --instances` now returns a flat list without
+    # project/model breakdowns, so we must call the `claude daily` subcommand.
+    cmd = ["npx", "ccusage@latest", "claude", "daily", "--json", "--instances", "--no-color"]
     if since:
         cmd.extend(["--since", since])
 
@@ -102,8 +107,8 @@ def collect_daily_usage(since: str | None = None) -> list[DailyUsage]:
 
 
 def collect_session_usage() -> list[SessionUsage]:
-    """Call `npx ccusage@latest session --json` and parse into SessionUsage records."""
-    cmd = ["npx", "ccusage@latest", "session", "--json", "--no-color"]
+    """Call `npx ccusage@latest claude session --json` and parse into SessionUsage records."""
+    cmd = ["npx", "ccusage@latest", "claude", "session", "--json", "--no-color"]
     raw = _run_command(cmd)
     data = json.loads(raw)
 
@@ -150,29 +155,128 @@ def _find_ccost() -> str:
     raise FileNotFoundError("ccost not found")
 
 
+def _ccost_view(ccost_bin: str, per: str) -> dict | None:
+    """Run `ccost sl --per <per> --output json` and return parsed JSON dict."""
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False,
+        ) as f:
+            tmp_path = f.name
+        _run_command(
+            [ccost_bin, "sl", "--per", per, "--output", "json", "--filename", tmp_path],
+            timeout=60,
+        )
+        with open(tmp_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (CollectorError, FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None:
-    """(Optional) Call `ccost sl --output json`. Returns None if ccost not installed."""
+    """Call `ccost sl --output json` (5h + 1w views) and parse active windows.
+
+    ccost writes its JSON report to a file (default: ccost.json in cwd), not
+    stdout. We use --filename with a temp file so the report doesn't pollute
+    the working directory. The active 5h window is identified by
+    windowStart <= now < windowEnd; we report session_duration_seconds as
+    (now - windowStart) so that reset_at = timestamp + 5h - duration ≡ windowEnd.
+    We additionally call `--per 1w` to obtain the weekly window's windowEnd,
+    stored as weekly_reset_at (ISO 8601). Returns None if ccost is unavailable.
+    """
     try:
         ccost_bin = ccost_path or _find_ccost()
-        raw = _run_command([ccost_bin, "sl", "--output", "json"], timeout=60)
-        data = json.loads(raw)
-        results: list[RateLimit] = []
-        for entry in data if isinstance(data, list) else [data]:
-            results.append(RateLimit(
-                timestamp=entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                window_5h_percent=entry.get("window_5h_percent"),
-                window_1w_percent=entry.get("window_1w_percent"),
-                session_cost_usd=entry.get("session_cost_usd"),
-                session_duration_seconds=entry.get("session_duration_seconds"),
-            ))
-        return results
-    except (CollectorError, FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
         return None
+
+    try:
+        from dateutil.parser import isoparse
+    except ImportError:
+        return None
+
+    data_5h = _ccost_view(ccost_bin, "5h")
+    if not data_5h:
+        return None
+
+    entries = data_5h.get("data") if isinstance(data_5h, dict) else None
+    if not entries:
+        return None
+
+    now = datetime.now(timezone.utc)
+    active = None
+    latest_start = None
+    for entry in entries:
+        ws = entry.get("windowStart")
+        we = entry.get("windowEnd")
+        if not ws or not we:
+            continue
+        try:
+            ws_dt = isoparse(ws)
+            we_dt = isoparse(we)
+        except (ValueError, TypeError):
+            continue
+        if ws_dt <= now < we_dt and (latest_start is None or ws_dt > latest_start):
+            active = entry
+            latest_start = ws_dt
+    if active is None:
+        active = entries[-1]
+
+    ws = active.get("windowStart")
+    try:
+        window_start = isoparse(ws) if ws else None
+    except (ValueError, TypeError):
+        window_start = None
+
+    duration_seconds = (
+        int((now - window_start).total_seconds())
+        if window_start
+        else None
+    )
+
+    weekly_reset_at: str | None = None
+    data_1w = _ccost_view(ccost_bin, "1w")
+    w_entries = data_1w.get("data") if isinstance(data_1w, dict) else None
+    if w_entries:
+        for entry in w_entries:
+            we = entry.get("windowEnd")
+            ws = entry.get("windowStart")
+            if not we or not ws:
+                continue
+            try:
+                we_dt = isoparse(we)
+                ws_dt = isoparse(ws)
+            except (ValueError, TypeError):
+                continue
+            if ws_dt <= now < we_dt:
+                weekly_reset_at = we_dt.isoformat()
+                break
+        if weekly_reset_at is None:
+            we = w_entries[-1].get("windowEnd")
+            if we:
+                try:
+                    weekly_reset_at = isoparse(we).isoformat()
+                except (ValueError, TypeError):
+                    weekly_reset_at = None
+
+    return [RateLimit(
+        timestamp=now.isoformat(),
+        window_5h_percent=active.get("maxFiveHourPct"),
+        window_1w_percent=active.get("maxSevenDayPct"),
+        session_cost_usd=active.get("totalCost"),
+        session_duration_seconds=duration_seconds,
+        weekly_reset_at=weekly_reset_at,
+    )]
 
 
 def collect_blocks_usage() -> list[BlockUsage]:
-    """Call `npx ccusage@latest blocks --json --recent` and parse into BlockUsage records."""
-    cmd = ["npx", "ccusage@latest", "blocks", "--json", "--recent", "--no-color"]
+    """Call `npx ccusage@latest claude blocks --json --recent` and parse into BlockUsage records."""
+    cmd = ["npx", "ccusage@latest", "claude", "blocks", "--json", "--recent", "--no-color"]
     try:
         raw = _run_command(cmd)
     except CollectorError:
