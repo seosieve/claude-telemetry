@@ -167,6 +167,7 @@ def sync_rate_limits(
             "window_1w_percent": record.window_1w_percent,
             "session_cost_usd": record.session_cost_usd,
             "session_duration_seconds": record.session_duration_seconds,
+            "weekly_reset_at": record.weekly_reset_at,
         })
 
     if rows:

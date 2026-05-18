@@ -54,8 +54,13 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
 
     from supabase import create_client
 
-    from .collector import collect_daily_usage, collect_session_usage, collect_blocks_usage
-    from .sync import sync_daily_usage, sync_sessions, sync_blocks
+    from .collector import (
+        collect_daily_usage,
+        collect_session_usage,
+        collect_blocks_usage,
+        collect_rate_limits,
+    )
+    from .sync import sync_daily_usage, sync_sessions, sync_blocks, sync_rate_limits
 
     machine_id = config["machine_id"]
     client = create_client(config["supabase_url"], config["supabase_service_key"])
@@ -89,6 +94,14 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
     if blocks:
         r = sync_blocks(blocks, machine_id, client)
         results["blocks"] = r.records_upserted
+
+    # Rate limits (ccost) — keeps the 5h percent and reset countdown fresh
+    rate_limits = collect_rate_limits(
+        config.get("features", {}).get("ccost_path"),
+    )
+    if rate_limits:
+        r = sync_rate_limits(rate_limits, machine_id, client)
+        results["rate_limits"] = r.records_upserted
 
     total = sum(results.values())
     logger.info(

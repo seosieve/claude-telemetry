@@ -42,6 +42,7 @@ class RateLimit:
     window_1w_percent: float | None = None
     session_cost_usd: float | None = None
     session_duration_seconds: int | None = None
+    weekly_reset_at: str | None = None
 
 
 @dataclass
