@@ -12,6 +12,8 @@
 #      that re-runs `pipx install --force` daily at 05:10 and restarts the
 #      daemon. After bootstrap, every machine stays in sync with main without
 #      further manual intervention.
+#   4. Runs `cc-telemetry sync --force` once to backfill any historical days
+#      that the last_sync gate previously skipped.
 
 set -eu
 
@@ -38,10 +40,10 @@ fi
 
 mkdir -p "$LOG_DIR"
 
-echo "[1/3] Installing cc-telemetry from RiceGang fork..."
+echo "[1/4] Installing cc-telemetry from RiceGang fork..."
 "$PIPX_BIN" install --force "$FORK_URL"
 
-echo "[2/3] Restarting cc-telemetry daemon..."
+echo "[2/4] Restarting cc-telemetry daemon..."
 if [ -f "$DAEMON_PLIST" ]; then
     launchctl unload "$DAEMON_PLIST" 2>/dev/null || true
     launchctl load "$DAEMON_PLIST"
@@ -49,7 +51,7 @@ else
     echo "  (no existing daemon plist found; run 'cc-telemetry install' once to register it)"
 fi
 
-echo "[3/3] Installing auto-upgrade LaunchAgent..."
+echo "[3/4] Installing auto-upgrade LaunchAgent..."
 cat > "$UPGRADE_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -82,6 +84,13 @@ PLIST
 
 launchctl unload "$UPGRADE_PLIST" 2>/dev/null || true
 launchctl load "$UPGRADE_PLIST"
+
+echo "[4/4] Backfilling historical data (cc-telemetry sync --force)..."
+if command -v cc-telemetry >/dev/null 2>&1; then
+    cc-telemetry sync --force || echo "  (backfill failed; run 'cc-telemetry sync --force' manually)"
+else
+    echo "  (cc-telemetry CLI not on PATH; run 'cc-telemetry sync --force' manually)"
+fi
 
 echo ""
 echo "Done. This machine will auto-upgrade daily at 05:10 from $FORK_URL."
