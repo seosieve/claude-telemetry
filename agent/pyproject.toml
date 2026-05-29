@@ -30,11 +30,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://claude-telemetry.ryanbarbosa.com"
-Documentation = "https://claude-telemetry.ryanbarbosa.com/guide/getting-started"
-Repository = "https://github.com/RyanTech00/claude-telemetry"
-Issues = "https://github.com/RyanTech00/claude-telemetry/issues"
-Changelog = "https://github.com/RyanTech00/claude-telemetry/releases"
+Homepage = "https://github.com/seosieve/claude-telemetry"
+Documentation = "https://github.com/seosieve/claude-telemetry#readme"
+Repository = "https://github.com/seosieve/claude-telemetry"
+Issues = "https://github.com/seosieve/claude-telemetry/issues"
+Changelog = "https://github.com/seosieve/claude-telemetry/releases"
 
 [project.scripts]
 cc-telemetry = "claude_telemetry.cli:main"

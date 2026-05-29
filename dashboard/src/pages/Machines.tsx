@@ -6,6 +6,7 @@ import { rangeToDate, formatTokens, formatKstTimestamp, fillDateGaps } from "../
 import { getStatusDisplay } from "../lib/machineStatus";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { ConfirmDeleteModal } from "../components/ConfirmDeleteModal";
+import { Spinner } from "../components/Spinner";
 import {
   BarChart,
   Bar,
@@ -239,7 +240,7 @@ export function Machines() {
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner />
           Loading...
         </div>
       )}

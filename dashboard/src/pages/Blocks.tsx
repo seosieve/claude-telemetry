@@ -5,20 +5,8 @@ import { useMachineFilter } from "../hooks/useMachineFilter";
 import { formatTokens, daysAgo, today } from "../lib/dateUtils";
 import { EmptyState } from "../components/EmptyState";
 import { EmptyTimeline } from "../components/illustrations/EmptyTimeline";
-
-function ModelBadge({ model }: { model: string }) {
-  const name = model.split("-").pop() || model;
-  const colorClass = model.includes("opus")
-    ? "bg-rose-500/20 text-rose-400"
-    : model.includes("sonnet")
-      ? "bg-sky-500/20 text-sky-400"
-      : "bg-emerald-500/20 text-emerald-400";
-  return (
-    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${colorClass}`}>
-      {name}
-    </span>
-  );
-}
+import { ModelBadge } from "../components/ModelBadge";
+import { Spinner } from "../components/Spinner";
 
 function StatusBadge({ isActive, isGap }: { isActive: boolean; isGap: boolean }) {
   if (isActive) return <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">Active</span>;
@@ -101,7 +89,7 @@ export function Blocks() {
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner />
           Loading...
         </div>
       )}

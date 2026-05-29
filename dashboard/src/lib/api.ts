@@ -42,22 +42,6 @@ async function fetchJson<T>(path: string, params?: Record<string, string | undef
   return res.json();
 }
 
-async function postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${API_BASE}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401) {
-    handleUnauthorized();
-  }
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
-  }
-  return res.json();
-}
-
 // --- RPC endpoints ---
 
 export async function fetchUsageSummary(
@@ -182,21 +166,6 @@ export async function fetchRateLimits(machineId?: string, limit?: string) {
     machine_id: machineId,
     limit,
   });
-}
-
-// --- Agent deployment ---
-
-export interface AgentConfig {
-  machine_id: string;
-  api_key: string;
-  supabase_url: string;
-}
-
-export async function generateAgentConfig(
-  name: string,
-  os: string,
-): Promise<AgentConfig> {
-  return postJson("generate-agent-config", { name, os });
 }
 
 // --- Machine management ---

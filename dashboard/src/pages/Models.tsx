@@ -2,7 +2,8 @@ import { useState, useMemo } from "react";
 import { useUsageData } from "../hooks/useUsageData";
 import { rangeToDate } from "../lib/dateUtils";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
-import { MODEL_COLORS } from "../lib/colors";
+import { MODEL_COLORS, MODEL_CARD_CLASS } from "../lib/colors";
+import { Spinner } from "../components/Spinner";
 import {
   AreaChart,
   Area,
@@ -59,30 +60,30 @@ export function Models() {
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner />
           Loading...
         </div>
       )}
 
       {/* Model metric cards */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4">
-          <p className="text-xs font-medium text-rose-400">Opus</p>
-          <p className="mt-1 font-mono text-2xl font-semibold text-rose-400">
+        <div className={`rounded-xl border p-4 ${MODEL_CARD_CLASS.opus.border}`}>
+          <p className={`text-xs font-medium ${MODEL_CARD_CLASS.opus.text}`}>Opus</p>
+          <p className={`mt-1 font-mono text-2xl font-semibold ${MODEL_CARD_CLASS.opus.text}`}>
             ${opusCost.toFixed(2)}
           </p>
           <p className="mt-1 text-xs text-slate-500">{opusPct.toFixed(0)}% of total</p>
         </div>
-        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-4">
-          <p className="text-xs font-medium text-sky-400">Sonnet</p>
-          <p className="mt-1 font-mono text-2xl font-semibold text-sky-400">
+        <div className={`rounded-xl border p-4 ${MODEL_CARD_CLASS.sonnet.border}`}>
+          <p className={`text-xs font-medium ${MODEL_CARD_CLASS.sonnet.text}`}>Sonnet</p>
+          <p className={`mt-1 font-mono text-2xl font-semibold ${MODEL_CARD_CLASS.sonnet.text}`}>
             ${sonnetCost.toFixed(2)}
           </p>
           <p className="mt-1 text-xs text-slate-500">{sonnetPct.toFixed(0)}% of total</p>
         </div>
-        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-          <p className="text-xs font-medium text-emerald-400">Haiku</p>
-          <p className="mt-1 font-mono text-2xl font-semibold text-emerald-400">
+        <div className={`rounded-xl border p-4 ${MODEL_CARD_CLASS.haiku.border}`}>
+          <p className={`text-xs font-medium ${MODEL_CARD_CLASS.haiku.text}`}>Haiku</p>
+          <p className={`mt-1 font-mono text-2xl font-semibold ${MODEL_CARD_CLASS.haiku.text}`}>
             ${haikuCost.toFixed(2)}
           </p>
           <p className="mt-1 text-xs text-slate-500">{haikuPct.toFixed(0)}% of total</p>

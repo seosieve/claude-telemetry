@@ -72,7 +72,7 @@ The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing
 ### Step 2 — Dashboard (Cloudflare Pages)
 
 ```bash
-git clone https://github.com/RyanTech00/claude-telemetry.git
+git clone https://github.com/seosieve/claude-telemetry.git
 cd claude-telemetry/dashboard
 npm install
 npx wrangler pages project create claude-telemetry
@@ -104,7 +104,7 @@ cc-telemetry doctor
 <summary>Alternative: install from source</summary>
 
 ```bash
-git clone https://github.com/RyanTech00/claude-telemetry.git
+git clone https://github.com/seosieve/claude-telemetry.git
 cd claude-telemetry/agent
 python3 -m venv venv
 source venv/bin/activate  # Windows: .\venv\Scripts\Activate
@@ -226,34 +226,14 @@ After these 3 steps, nothing remains — no data, no services, no secrets.
 | Auth | Magic Link | Supabase Auth |
 | API Proxy | Pages Functions | Cloudflare Workers |
 
-## Support
-
-If this tool saved you from rate limit blindness, consider buying me a coffee:
-
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/ryanbarbosa)
-
-Or just star the repo — it helps a lot!
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=RyanTech00%2Fclaude-telemetry&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=RyanTech00/claude-telemetry&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=RyanTech00/claude-telemetry&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=RyanTech00/claude-telemetry&type=date&legend=top-left" />
- </picture>
-</a>
-
 ## Releases
 
-See [GitHub Releases](https://github.com/RyanTech00/claude-telemetry/releases) for changelog.
-
-Latest: **v0.3.1** — statusLine fix, hook script migration, doctor timeout fix.
+See [GitHub Releases](https://github.com/seosieve/claude-telemetry/releases) for changelog.
 
 ## License
 
 MIT — see [LICENSE](LICENSE)
 
-## Author
+## Credits
 
-Ryan Barbosa — ryan@ryanbarbosa.com
+A fork of [claude-telemetry](https://github.com/RyanTech00/claude-telemetry) by Ryan Barbosa, adapted by [seosieve](https://github.com/seosieve).

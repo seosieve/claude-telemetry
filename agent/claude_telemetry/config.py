@@ -50,10 +50,6 @@ def detect_claude_data_dir() -> Path:
     return Path.home() / ".claude"
 
 
-def generate_machine_id() -> str:
-    return str(uuid.uuid4())
-
-
 def generate_api_key() -> str:
     return f"ct_{uuid.uuid4().hex}"
 

@@ -6,6 +6,7 @@ import { usePreferences } from "../hooks/usePreferences";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { EmptyState } from "../components/EmptyState";
 import { EmptyInsights } from "../components/illustrations/EmptyInsights";
+import { Spinner } from "../components/Spinner";
 import { fetchRateLimits, fetchTrends, fetchComparePeriods, type TrendsData, type ComparePeriodsData } from "../lib/api";
 import { daysAgo, today, formatTokens } from "../lib/dateUtils";
 import { calculateUsagePace } from "../lib/burnRate";
@@ -417,7 +418,7 @@ export function Insights() {
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner />
           Analyzing...
         </div>
       )}

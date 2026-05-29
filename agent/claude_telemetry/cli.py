@@ -22,7 +22,6 @@ from .config import (
     detect_claude_data_dir,
     detect_os,
     generate_api_key,
-    generate_machine_id,
     load_config,
     save_config,
 )

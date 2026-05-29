@@ -6,6 +6,7 @@ import { DailyCostChart } from "../components/charts/DailyCostChart";
 import { ModelBreakdown } from "../components/charts/ModelBreakdown";
 import { EmptyState } from "../components/EmptyState";
 import { EmptyDashboard } from "../components/illustrations/EmptyDashboard";
+import { Spinner } from "../components/Spinner";
 import { MonthlyCostChart } from "../components/charts/MonthlyCostChart";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { useUsageData } from "../hooks/useUsageData";
@@ -160,7 +161,7 @@ export function Overview() {
       {/* Loading overlay */}
       {loading && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner />
           Loading...
         </div>
       )}

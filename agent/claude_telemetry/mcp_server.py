@@ -11,14 +11,13 @@ Transport: stdio (default for Claude Code)
 
 from __future__ import annotations
 
-import json
 from datetime import date, timedelta
 from typing import Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from .config import INGEST_BASE_URL, load_config
+from .config import INGEST_BASE_URL
 
 mcp = FastMCP("cc-telemetry")
 

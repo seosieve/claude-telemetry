@@ -43,34 +43,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>("guest");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Validate token on mount and after callback
-  const validateToken = useCallback(async (t: string) => {
-    try {
-      const res = await fetch("/api/auth/me", {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { id: string; email: string };
-        setUser({ id: data.id, email: data.email });
-        setToken(t);
-        localStorage.setItem(TOKEN_KEY, t);
-        return true;
-      }
-    } catch {
-      // Token invalid
-    }
-    // Clear invalid token
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-    return false;
-  }, []);
-
   // Guest mode — no auth required, always authenticated
   useEffect(() => {
     setIsLoading(false);
-  }, [validateToken]);
+  }, []);
 
   const login = useCallback(
     async (email: string): Promise<{ success: boolean; error?: string }> => {

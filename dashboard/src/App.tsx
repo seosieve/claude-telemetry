@@ -7,6 +7,7 @@ import { useUsageData } from "./hooks/useUsageData";
 import { useAlertThresholds } from "./hooks/useAlertThresholds";
 import { daysAgo, today } from "./lib/dateUtils";
 import { Layout } from "./components/layout/Layout";
+import { Spinner } from "./components/Spinner";
 import { Login } from "./pages/Login";
 import { Overview } from "./pages/Overview";
 import { Daily } from "./pages/Daily";
@@ -91,7 +92,7 @@ function AuthenticatedApp() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950">
         <div className="flex items-center gap-2 text-sm text-slate-500">
-          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner size="md" />
           Loading...
         </div>
       </div>

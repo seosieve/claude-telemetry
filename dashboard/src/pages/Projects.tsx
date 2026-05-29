@@ -6,6 +6,8 @@ import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { MetricCard } from "../components/cards/MetricCard";
 import { EmptyState } from "../components/EmptyState";
 import { EmptyFolder } from "../components/illustrations/EmptyFolder";
+import { ModelBadge } from "../components/ModelBadge";
+import { Spinner } from "../components/Spinner";
 import {
   BarChart,
   Bar,
@@ -78,7 +80,7 @@ export function Projects() {
 
       {loading && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-sky-400" />
+          <Spinner />
           Loading...
         </div>
       )}
@@ -221,17 +223,7 @@ export function Projects() {
                       {pct.toFixed(1)}%
                     </td>
                     <td className="py-1.5">
-                      <span
-                        className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                          p.primary_model?.includes("opus")
-                            ? "bg-rose-500/20 text-rose-400"
-                            : p.primary_model?.includes("sonnet")
-                              ? "bg-sky-500/20 text-sky-400"
-                              : "bg-emerald-500/20 text-emerald-400"
-                        }`}
-                      >
-                        {p.primary_model?.split("-").pop() || "?"}
-                      </span>
+                      <ModelBadge model={p.primary_model} />
                     </td>
                     <td className="py-1.5 text-right font-mono text-slate-400">
                       {p.machines_used}
