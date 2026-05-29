@@ -1,335 +1,173 @@
-"""Sync module — sends collected data to Supabase."""
+"""Sync module — POST collected data to the dashboard ingest endpoint.
+
+Agents no longer talk to the database directly. Each sync_* function ships its
+rows to POST /api/ingest authenticated with the machine's api_key; the endpoint
+resolves machine_id from the key and performs the upsert (plus sync_log /
+last_sync_at bookkeeping) server-side. The DB credential never leaves the server.
+"""
 
 from __future__ import annotations
 
 import logging
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any
 
-from supabase import create_client, Client
+import httpx
 
-from .config import load_config, update_last_sync, get_last_sync
-from .models import DailyUsage, SessionUsage, RateLimit, StatsExtra, BlockUsage, SyncResult
+from .config import update_last_sync, get_last_sync, INGEST_BASE_URL
+from .models import (
+    DailyUsage,
+    SessionUsage,
+    RateLimit,
+    StatsExtra,
+    BlockUsage,
+    SyncResult,
+)
 
 logger = logging.getLogger("claude-telemetry")
 
-
-def _get_client(config: dict[str, Any]) -> Client:
-    return create_client(config["supabase_url"], config["supabase_service_key"])
+_INGEST_TIMEOUT = 60
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _post_ingest(api_key: str, kind: str, rows: list[dict]) -> dict:
+    """POST rows to the ingest endpoint. Raises on non-2xx."""
+    resp = httpx.post(
+        f"{INGEST_BASE_URL}/api/ingest",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"kind": kind, "rows": rows},
+        timeout=_INGEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def sync_daily_usage(
-    records: list[DailyUsage],
-    machine_id: str,
-    client: Client,
-    force: bool = False,
+    records: list[DailyUsage], api_key: str, force: bool = False
 ) -> SyncResult:
-    """Batch upsert daily usage records to Supabase."""
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
     last_sync = None if force else get_last_sync("daily_usage")
 
-    rows = []
+    rows: list[dict] = []
     for record in records:
         if last_sync and record.date < last_sync[:10]:
             continue
-        rows.append({
-            "machine_id": machine_id,
-            "date": record.date,
-            "project": record.project,
-            "model": record.model,
-            "input_tokens": record.input_tokens,
-            "output_tokens": record.output_tokens,
-            "cache_creation_tokens": record.cache_creation_tokens,
-            "cache_read_tokens": record.cache_read_tokens,
-            "total_tokens": record.total_tokens,
-            "cost_usd": record.cost_usd,
-        })
+        rows.append(asdict(record))
 
-    # Deduplicate by (machine_id, date, project, model) keeping highest cost
-    seen: dict[tuple[str, str, str, str], dict] = {}
+    # Deduplicate by (date, project, model) keeping highest cost — a multi-row
+    # upsert can't touch the same ON CONFLICT key twice.
+    seen: dict[tuple, dict] = {}
     for row in rows:
-        key = (row["machine_id"], row["date"], row["project"], row["model"])
+        key = (row["date"], row["project"], row["model"])
         if key not in seen or row.get("cost_usd", 0) > seen[key].get("cost_usd", 0):
             seen[key] = row
     rows = list(seen.values())
 
     if rows:
         try:
-            client.table("daily_usage").upsert(
-                rows,
-                on_conflict="machine_id,date,project,model",
-            ).execute()
-            upserted = len(rows)
+            res = _post_ingest(api_key, "daily_usage", rows)
+            upserted = res.get("upserted", len(rows))
         except Exception as e:
-            errors.append(f"daily_usage batch: {e}")
+            errors.append(f"daily_usage: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-
     if not errors:
         update_last_sync("daily_usage", _now_iso())
-
-    _log_sync(client, machine_id, "daily_usage", upserted, errors, elapsed)
-
-    return SyncResult(
-        source="daily_usage",
-        records_upserted=upserted,
-        errors=errors,
-        duration_ms=elapsed,
-    )
+    return SyncResult("daily_usage", upserted, errors, elapsed)
 
 
 def sync_sessions(
-    records: list[SessionUsage],
-    machine_id: str,
-    client: Client,
-    force: bool = False,
+    records: list[SessionUsage], api_key: str, force: bool = False
 ) -> SyncResult:
-    """Batch upsert session records to Supabase."""
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
-    rows = []
-    for record in records:
-        rows.append({
-            "machine_id": machine_id,
-            "session_id": record.session_id,
-            "project": record.project,
-            "project_path": record.project_path,
-            "models": record.models,
-            "is_subagent": record.is_subagent,
-            "input_tokens": record.input_tokens,
-            "output_tokens": record.output_tokens,
-            "cache_creation_tokens": record.cache_creation_tokens,
-            "cache_read_tokens": record.cache_read_tokens,
-            "total_tokens": record.total_tokens,
-            "cost_usd": record.cost_usd,
-            "last_activity_at": record.last_activity_at,
-        })
-
-    # Deduplicate by (machine_id, session_id) keeping highest cost
-    seen: dict[tuple[str, str], dict] = {}
+    rows = [asdict(r) for r in records]
+    seen: dict[str, dict] = {}
     for row in rows:
-        key = (row["machine_id"], row["session_id"])
+        key = row["session_id"]
         if key not in seen or row.get("cost_usd", 0) > seen[key].get("cost_usd", 0):
             seen[key] = row
     rows = list(seen.values())
 
     if rows:
         try:
-            client.table("sessions").upsert(
-                rows,
-                on_conflict="machine_id,session_id",
-            ).execute()
-            upserted = len(rows)
+            res = _post_ingest(api_key, "sessions", rows)
+            upserted = res.get("upserted", len(rows))
         except Exception as e:
-            errors.append(f"sessions batch: {e}")
+            errors.append(f"sessions: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-
     if not errors:
         update_last_sync("sessions", _now_iso())
-
-    _log_sync(client, machine_id, "sessions", upserted, errors, elapsed)
-
-    return SyncResult(
-        source="sessions",
-        records_upserted=upserted,
-        errors=errors,
-        duration_ms=elapsed,
-    )
+    return SyncResult("sessions", upserted, errors, elapsed)
 
 
-def sync_rate_limits(
-    records: list[RateLimit],
-    machine_id: str,
-    client: Client,
-) -> SyncResult:
-    """Batch upsert rate limit records to Supabase."""
+def sync_rate_limits(records: list[RateLimit], api_key: str) -> SyncResult:
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
-    rows = []
-    for record in records:
-        rows.append({
-            "machine_id": machine_id,
-            "timestamp": record.timestamp,
-            "window_5h_percent": record.window_5h_percent,
-            "window_1w_percent": record.window_1w_percent,
-            "session_cost_usd": record.session_cost_usd,
-            "session_duration_seconds": record.session_duration_seconds,
-            "weekly_reset_at": record.weekly_reset_at,
-        })
-
+    rows = [asdict(r) for r in records]
     if rows:
         try:
-            client.table("rate_limits").upsert(
-                rows,
-                on_conflict="machine_id,timestamp",
-            ).execute()
-            upserted = len(rows)
+            res = _post_ingest(api_key, "rate_limits", rows)
+            upserted = res.get("upserted", len(rows))
         except Exception as e:
-            errors.append(f"rate_limits batch: {e}")
+            errors.append(f"rate_limits: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-
     if not errors:
         update_last_sync("rate_limits", _now_iso())
-
-    _log_sync(client, machine_id, "rate_limits", upserted, errors, elapsed)
-
-    return SyncResult(
-        source="rate_limits",
-        records_upserted=upserted,
-        errors=errors,
-        duration_ms=elapsed,
-    )
+    return SyncResult("rate_limits", upserted, errors, elapsed)
 
 
-def sync_stats_extra(
-    stats: StatsExtra,
-    machine_id: str,
-    client: Client,
-) -> SyncResult:
-    """Upsert stats_extra record to Supabase (not insert — prevents duplicates)."""
+def sync_stats_extra(stats: StatsExtra, api_key: str) -> SyncResult:
     start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
-    row = {
-        "machine_id": machine_id,
-        "total_sessions": stats.total_sessions,
-        "total_messages": stats.total_messages,
-        "longest_session_messages": stats.longest_session_messages,
-        "longest_session_duration_ms": stats.longest_session_duration_ms,
-        "first_session_date": stats.first_session_date,
-        "hour_counts": stats.hour_counts,
-        "daily_activity": stats.daily_activity,
-        "model_usage": stats.model_usage,
-    }
     try:
-        client.table("stats_extra").upsert(
-            row,
-            on_conflict="machine_id",
-        ).execute()
-        upserted = 1
+        res = _post_ingest(api_key, "stats_extra", [asdict(stats)])
+        upserted = res.get("upserted", 1)
     except Exception as e:
         errors.append(f"stats_extra: {e}")
 
     elapsed = int((time.monotonic() - start) * 1000)
-
     if not errors:
         update_last_sync("stats_extra", _now_iso())
-
-    _log_sync(client, machine_id, "stats_extra", upserted, errors, elapsed)
-
-    return SyncResult(
-        source="stats_extra",
-        records_upserted=upserted,
-        errors=errors,
-        duration_ms=elapsed,
-    )
+    return SyncResult("stats_extra", upserted, errors, elapsed)
 
 
-def sync_blocks(
-    records: list[BlockUsage],
-    machine_id: str,
-    client: Client,
-) -> SyncResult:
-    """Batch upsert block records to Supabase."""
-    start_t = time.monotonic()
+def sync_blocks(records: list[BlockUsage], api_key: str) -> SyncResult:
+    start = time.monotonic()
     errors: list[str] = []
     upserted = 0
 
-    rows = []
-    for record in records:
-        rows.append({
-            "machine_id": machine_id,
-            "block_start": record.block_start,
-            "block_end": record.block_end,
-            "is_active": record.is_active,
-            "is_gap": record.is_gap,
-            "input_tokens": record.input_tokens,
-            "output_tokens": record.output_tokens,
-            "cache_creation_tokens": record.cache_creation_tokens,
-            "cache_read_tokens": record.cache_read_tokens,
-            "total_tokens": record.total_tokens,
-            "cost_usd": record.cost_usd,
-            "models": record.models,
-            "duration_minutes": record.duration_minutes,
-            "entries": record.entries,
-        })
-
-    # Deduplicate by (machine_id, block_start)
-    seen: dict[tuple[str, str], dict] = {}
+    rows = [asdict(r) for r in records]
+    # Deduplicate by block_start. The "deactivate stale active blocks" step now
+    # lives server-side in the ingest handler.
+    seen: dict[str, dict] = {}
     for row in rows:
-        key = (row["machine_id"], row["block_start"])
+        key = row["block_start"]
         if key not in seen or row.get("cost_usd", 0) > seen[key].get("cost_usd", 0):
             seen[key] = row
     rows = list(seen.values())
 
     if rows:
-        # Deactivate blocks no longer reported as active by ccusage
-        active_starts = [r["block_start"] for r in rows if r.get("is_active")]
         try:
-            q = client.table("blocks").update({"is_active": False}).eq(
-                "machine_id", machine_id
-            ).eq("is_active", True)
-            if active_starts:
-                q = q.not_.in_("block_start", active_starts)
-            q.execute()
-        except Exception:
-            pass  # Best-effort deactivation
-
-        try:
-            client.table("blocks").upsert(
-                rows,
-                on_conflict="machine_id,block_start",
-            ).execute()
-            upserted = len(rows)
+            res = _post_ingest(api_key, "blocks", rows)
+            upserted = res.get("upserted", len(rows))
         except Exception as e:
-            errors.append(f"blocks batch: {e}")
+            errors.append(f"blocks: {e}")
 
-    elapsed = int((time.monotonic() - start_t) * 1000)
-    _log_sync(client, machine_id, "blocks", upserted, errors, elapsed)
-
-    return SyncResult(
-        source="blocks",
-        records_upserted=upserted,
-        errors=errors,
-        duration_ms=elapsed,
-    )
-
-
-def _log_sync(
-    client: Client,
-    machine_id: str,
-    source: str,
-    records_upserted: int,
-    errors: list[str],
-    duration_ms: int,
-) -> None:
-    """Write an entry to sync_log and update machine last_sync_at."""
-    try:
-        client.table("sync_log").insert({
-            "machine_id": machine_id,
-            "source": source,
-            "records_upserted": records_upserted,
-            "errors": errors if errors else None,
-            "duration_ms": duration_ms,
-        }).execute()
-
-        client.table("machines").update({
-            "last_sync_at": _now_iso(),
-        }).eq("id", machine_id).execute()
-    except Exception as e:
-        logger.warning("Failed to log sync: %s", e)
+    elapsed = int((time.monotonic() - start) * 1000)
+    return SyncResult("blocks", upserted, errors, elapsed)

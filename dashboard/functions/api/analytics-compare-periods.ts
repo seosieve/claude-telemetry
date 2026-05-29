@@ -3,23 +3,7 @@
  * Returns: cost/tokens for each period, % change, top 5 project movers.
  */
 
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
-
-async function supabaseRpc(env: Env, fn: string, params: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-    },
-    body: JSON.stringify(params),
-  });
-  return res.json();
-}
+import { db, json, type Env } from "./_lib";
 
 function resolvePeriod(name: string): { start: string; end: string; label: string } {
   const now = new Date();
@@ -48,16 +32,21 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const periodA = url.searchParams.get("period_a") || "last_week";
   const periodB = url.searchParams.get("period_b") || "this_week";
-  const machineId = url.searchParams.get("machine_id") || null;
+
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const rawMachineId = url.searchParams.get("machine_id");
+  const machineId = rawMachineId && uuidRe.test(rawMachineId) ? rawMachineId : null;
 
   const a = resolvePeriod(periodA);
   const b = resolvePeriod(periodB);
 
+  const sql = db(context.env);
+
   const [usageA, usageB, projA, projB] = await Promise.all([
-    supabaseRpc(context.env, "get_usage_summary", { p_start_date: a.start, p_end_date: a.end, p_machine_id: machineId }),
-    supabaseRpc(context.env, "get_usage_summary", { p_start_date: b.start, p_end_date: b.end, p_machine_id: machineId }),
-    supabaseRpc(context.env, "get_project_costs", { p_start_date: a.start, p_end_date: a.end, p_machine_id: machineId }),
-    supabaseRpc(context.env, "get_project_costs", { p_start_date: b.start, p_end_date: b.end, p_machine_id: machineId }),
+    sql`select * from get_usage_summary(${a.start}, ${a.end}, ${machineId})`,
+    sql`select * from get_usage_summary(${b.start}, ${b.end}, ${machineId})`,
+    sql`select * from get_project_costs(${a.start}, ${a.end}, ${machineId})`,
+    sql`select * from get_project_costs(${b.start}, ${b.end}, ${machineId})`,
   ]) as [
     Array<{ total_cost: number; total_tokens: number }>,
     Array<{ total_cost: number; total_tokens: number }>,
@@ -90,11 +79,11 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
     .slice(0, 5);
 
-  return new Response(JSON.stringify({
+  return json({
     period_a: { ...a, cost: Math.round(costA * 100) / 100, tokens: tokensA },
     period_b: { ...b, cost: Math.round(costB * 100) / 100, tokens: tokensB },
     cost_change_pct: Math.round(costChange * 10) / 10,
     tokens_change_pct: Math.round(tokensChange * 10) / 10,
     movers,
-  }), { headers: { "Content-Type": "application/json" } });
+  });
 };

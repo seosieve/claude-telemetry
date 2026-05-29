@@ -9,11 +9,9 @@
  * Protected by X-Cron-Secret header.
  */
 
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-  CRON_SECRET?: string;
-}
+import { db, json, type Env } from "./_lib";
+
+type Sql = ReturnType<typeof db>;
 
 interface NotifPrefs {
   webhook_url: string | null;
@@ -36,54 +34,22 @@ interface Alert {
   url_path: string;
 }
 
-async function supabaseGet(env: Env, path: string): Promise<unknown> {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-    },
-  });
-  return res.json();
-}
-
-async function supabaseRpc(env: Env, fn: string, params: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-    },
-    body: JSON.stringify(params),
-  });
-  return res.json();
-}
-
-async function supabaseInsert(env: Env, table: string, row: Record<string, unknown>): Promise<void> {
-  await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-    },
-    body: JSON.stringify(row),
-  });
-}
-
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function alreadySentToday(env: Env, userId: string, type: string): Promise<boolean> {
-  const rows = await supabaseGet(
-    env,
-    `notification_history?user_id=eq.${userId}&type=eq.${type}&sent_at=gte.${todayISO()}T00:00:00Z&limit=1`,
-  ) as Array<unknown>;
+async function alreadySentToday(sql: Sql, userId: string, type: string): Promise<boolean> {
+  const rows = await sql`
+    select 1 from notification_history
+    where user_id = ${userId}
+      and type = ${type}
+      and sent_at >= ${`${todayISO()}T00:00:00Z`}
+    limit 1
+  `;
   return rows.length > 0;
 }
 
-async function checkAlerts(env: Env, user: UserRow): Promise<Alert[]> {
+async function checkAlerts(sql: Sql, user: UserRow): Promise<Alert[]> {
   const alerts: Alert[] = [];
   const types = user.notifications?.types || {};
 
@@ -91,10 +57,9 @@ async function checkAlerts(env: Env, user: UserRow): Promise<Alert[]> {
   if (types.project_budget !== false && Object.keys(user.project_budgets || {}).length > 0) {
     const d = new Date();
     d.setDate(d.getDate() - 30);
-    const projects = await supabaseRpc(env, "get_project_costs", {
-      p_start_date: d.toISOString().slice(0, 10),
-      p_end_date: todayISO(),
-    }) as Array<{ project: string; total_cost: number }>;
+    const projects = (await sql`
+      select * from get_project_costs(${d.toISOString().slice(0, 10)}, ${todayISO()}, ${null})
+    `) as Array<{ project: string; total_cost: number }>;
 
     for (const p of projects) {
       const budget = user.project_budgets[p.project];
@@ -120,38 +85,45 @@ async function checkAlerts(env: Env, user: UserRow): Promise<Alert[]> {
 
   // 2. Rate limits at 90%+
   if (types.rate_limit !== false) {
-    const rows = await supabaseGet(env, "rate_limits?order=timestamp.desc&limit=1") as Array<{
+    const rows = (await sql`
+      select window_5h_percent, window_1w_percent
+      from rate_limits
+      order by timestamp desc
+      limit 1
+    `) as Array<{
       window_5h_percent: number | null;
       window_1w_percent: number | null;
     }>;
 
     if (rows.length > 0) {
       const r = rows[0];
-      if (r.window_5h_percent != null && r.window_5h_percent > 90) {
+      const w5h = r.window_5h_percent != null ? Number(r.window_5h_percent) : null;
+      const w1w = r.window_1w_percent != null ? Number(r.window_1w_percent) : null;
+      if (w5h != null && w5h > 90) {
         alerts.push({
           type: "rate_limit_5h",
           title: "Rate Limit Warning",
-          description: `5-hour rate limit at **${r.window_5h_percent.toFixed(1)}%**`,
+          description: `5-hour rate limit at **${w5h.toFixed(1)}%**`,
           fields: [
             { name: "Window", value: "5-hour", inline: true },
-            { name: "Usage", value: `${r.window_5h_percent.toFixed(1)}%`, inline: true },
-            { name: "Status", value: r.window_5h_percent >= 100 ? "LIMIT HIT" : "Warning", inline: true },
+            { name: "Usage", value: `${w5h.toFixed(1)}%`, inline: true },
+            { name: "Status", value: w5h >= 100 ? "LIMIT HIT" : "Warning", inline: true },
           ],
-          color: r.window_5h_percent >= 100 ? 15548997 : 16744192,
+          color: w5h >= 100 ? 15548997 : 16744192,
           url_path: "/insights",
         });
       }
-      if (r.window_1w_percent != null && r.window_1w_percent > 90) {
+      if (w1w != null && w1w > 90) {
         alerts.push({
           type: "rate_limit_1w",
           title: "Rate Limit Warning",
-          description: `Weekly rate limit at **${r.window_1w_percent.toFixed(1)}%**`,
+          description: `Weekly rate limit at **${w1w.toFixed(1)}%**`,
           fields: [
             { name: "Window", value: "Weekly", inline: true },
-            { name: "Usage", value: `${r.window_1w_percent.toFixed(1)}%`, inline: true },
-            { name: "Status", value: r.window_1w_percent >= 100 ? "LIMIT HIT" : "Warning", inline: true },
+            { name: "Usage", value: `${w1w.toFixed(1)}%`, inline: true },
+            { name: "Status", value: w1w >= 100 ? "LIMIT HIT" : "Warning", inline: true },
           ],
-          color: r.window_1w_percent >= 100 ? 15548997 : 16744192,
+          color: w1w >= 100 ? 15548997 : 16744192,
           url_path: "/insights",
         });
       }
@@ -205,17 +177,15 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   // Auth
   if (context.env.CRON_SECRET) {
     if (context.request.headers.get("X-Cron-Secret") !== context.env.CRON_SECRET) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return json({ error: "Unauthorized" }, 401);
     }
   }
 
-  const users = await supabaseGet(
-    context.env,
-    "user_preferences?select=user_id,project_budgets,notifications",
-  ) as UserRow[];
+  const sql = db(context.env);
+
+  const users = (await sql`
+    select user_id, project_budgets, notifications from user_preferences
+  `) as UserRow[];
 
   let totalSent = 0;
 
@@ -223,27 +193,21 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     const notif = user.notifications;
     if (!notif?.webhook_enabled || !notif.webhook_url) continue;
 
-    const alerts = await checkAlerts(context.env, user);
+    const alerts = await checkAlerts(sql, user);
 
     for (const alert of alerts) {
-      if (await alreadySentToday(context.env, user.user_id, alert.type)) continue;
+      if (await alreadySentToday(sql, user.user_id, alert.type)) continue;
 
       const sent = await sendWebhook(notif.webhook_url, alert);
       if (sent) {
-        await supabaseInsert(context.env, "notification_history", {
-          user_id: user.user_id,
-          type: alert.type,
-          title: alert.title,
-          body: alert.description,
-          channel: "webhook",
-        });
+        await sql`
+          insert into notification_history (user_id, type, title, body, channel)
+          values (${user.user_id}, ${alert.type}, ${alert.title}, ${alert.description}, ${"webhook"})
+        `;
         totalSent++;
       }
     }
   }
 
-  return new Response(
-    JSON.stringify({ ok: true, users_checked: users.length, notifications_sent: totalSent }),
-    { headers: { "Content-Type": "application/json" } },
-  );
+  return json({ ok: true, users_checked: users.length, notifications_sent: totalSent });
 };

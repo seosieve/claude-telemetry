@@ -15,19 +15,33 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
-from .config import load_config
+from .config import INGEST_BASE_URL, load_config
 
 mcp = FastMCP("cc-telemetry")
 
 
-def _get_client() -> Any:
-    """Create Supabase client from agent config."""
-    from supabase import create_client
+def _api_get(path: str, params: dict[str, Any] | None = None) -> Any:
+    """GET a dashboard Functions read endpoint and return parsed JSON.
 
-    config = load_config()
-    return create_client(config["supabase_url"], config["supabase_service_key"])
+    Read endpoints run in guest mode (no auth), so no Authorization header is
+    needed. None-valued params are dropped so optional filters can be omitted.
+    """
+    resp = httpx.get(
+        f"{INGEST_BASE_URL}{path}",
+        params={k: v for k, v in (params or {}).items() if v is not None},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _machine_names() -> dict[str, str]:
+    """Build a machine_id -> name map from /api/machines (all machines)."""
+    rows = _api_get("/api/machines", {"active_only": "false"}) or []
+    return {r.get("id"): r.get("name") for r in rows if r.get("id")}
 
 
 def _fmt(val: Any) -> str:
@@ -55,16 +69,13 @@ def get_daily_usage(days: int = 7, machine_id: str | None = None) -> str:
         days: Number of days to look back (default 7)
         machine_id: Optional UUID to filter to a specific machine
     """
-    client = _get_client()
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=days)).isoformat()
 
-    params: dict[str, Any] = {"p_start_date": start, "p_end_date": end}
-    if machine_id:
-        params["p_machine_id"] = machine_id
-
-    result = client.rpc("get_usage_summary", params).execute()
-    rows = result.data or []
+    rows = _api_get(
+        "/api/usage-summary",
+        {"start_date": start, "end_date": end, "machine_id": machine_id},
+    ) or []
 
     if not rows:
         return f"No usage data found for the last {days} days."
@@ -98,14 +109,7 @@ def get_weekly_usage(weeks: int = 4, machine_id: str | None = None) -> str:
         weeks: Number of weeks to show (default 4)
         machine_id: Optional UUID to filter to a specific machine
     """
-    client = _get_client()
-
-    params: dict[str, Any] = {}
-    if machine_id:
-        params["p_machine_id"] = machine_id
-
-    result = client.rpc("get_weekly_rate_estimate", params).execute()
-    rows = result.data or []
+    rows = _api_get("/api/weekly-estimate", {"machine_id": machine_id}) or []
 
     # Limit to requested weeks
     rows = rows[:weeks]
@@ -136,23 +140,18 @@ def get_active_blocks() -> str:
     Shows which machines have active blocks, their cost, duration, and
     token usage. Useful for checking real-time spending.
     """
-    client = _get_client()
-
-    result = (
-        client.table("blocks")
-        .select("*, machines(name)")
-        .eq("is_active", True)
-        .order("block_start", desc=True)
-        .execute()
-    )
-    rows = result.data or []
+    rows = _api_get("/api/blocks", {"active_only": "true"}) or []
 
     if not rows:
         return "No active billing blocks right now."
 
+    # /api/blocks returns raw block rows without the machines(name) join, so
+    # resolve machine names separately via /api/machines.
+    names = _machine_names()
+
     lines = [f"{len(rows)} active block(s)\n"]
     for r in rows:
-        machine_name = r.get("machines", {}).get("name", "unknown") if r.get("machines") else "unknown"
+        machine_name = names.get(r.get("machine_id"), "unknown")
         cost = float(r.get("cost_usd", 0) or 0)
         duration = r.get("duration_minutes", 0)
         tokens = int(r.get("total_tokens", 0) or 0)
@@ -177,22 +176,17 @@ def get_rate_limits(machine_id: str | None = None) -> str:
     Args:
         machine_id: Optional UUID to filter to a specific machine
     """
-    client = _get_client()
-
-    query = (
-        client.table("rate_limits")
-        .select("*, machines(name)")
-        .order("timestamp", desc=True)
-        .limit(20)
-    )
-    if machine_id:
-        query = query.eq("machine_id", machine_id)
-
-    result = query.execute()
-    rows = result.data or []
+    rows = _api_get(
+        "/api/rate-limits",
+        {"machine_id": machine_id, "limit": "20"},
+    ) or []
 
     if not rows:
         return "No rate limit data available. Make sure ccost is installed and setup-statusline is configured."
+
+    # /api/rate-limits returns raw rows without the machines(name) join, so
+    # resolve machine names separately via /api/machines.
+    names = _machine_names()
 
     # Group by machine, show latest per machine
     seen: dict[str, dict] = {}
@@ -203,7 +197,7 @@ def get_rate_limits(machine_id: str | None = None) -> str:
 
     lines = ["Rate limit status\n"]
     for mid, r in seen.items():
-        machine_name = r.get("machines", {}).get("name", mid[:8]) if r.get("machines") else mid[:8]
+        machine_name = names.get(mid) or (mid[:8] if mid else "unknown")
         w5h = r.get("window_5h_percent")
         w1w = r.get("window_1w_percent")
         w5h_str = f"{w5h:.1f}%" if w5h is not None else "—"
@@ -221,13 +215,10 @@ def get_machines() -> str:
     Shows machine name, total cost, tokens, days active, last activity,
     and top project for each machine.
     """
-    client = _get_client()
-
-    result = client.rpc("get_machine_summary", {
-        "p_start_date": "2020-01-01",
-        "p_end_date": date.today().isoformat(),
-    }).execute()
-    rows = result.data or []
+    rows = _api_get(
+        "/api/machine-summary",
+        {"start_date": "2020-01-01", "end_date": date.today().isoformat()},
+    ) or []
 
     if not rows:
         return "No machines registered. Deploy an agent first."
@@ -260,16 +251,13 @@ def get_projects(days: int = 30, limit: int = 10, machine_id: str | None = None)
         limit: Max number of projects to return (default 10)
         machine_id: Optional UUID to filter to a specific machine
     """
-    client = _get_client()
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=days)).isoformat()
 
-    params: dict[str, Any] = {"p_start_date": start, "p_end_date": end}
-    if machine_id:
-        params["p_machine_id"] = machine_id
-
-    result = client.rpc("get_project_costs", params).execute()
-    rows = result.data or []
+    rows = _api_get(
+        "/api/project-costs",
+        {"start_date": start, "end_date": end, "machine_id": machine_id},
+    ) or []
     rows = rows[:limit]
 
     if not rows:
@@ -302,11 +290,8 @@ def get_plan_savings(days: int = 30) -> str:
     Args:
         days: Look-back period in days (default 30)
     """
-    client = _get_client()
-
-    # Get plan info from user_preferences
-    prefs_result = client.table("user_preferences").select("plan_cost, plan_name").limit(1).execute()
-    prefs = prefs_result.data[0] if prefs_result.data else {}
+    # Get plan info from user_preferences (single object response)
+    prefs = _api_get("/api/preferences") or {}
     plan_cost = prefs.get("plan_cost")
     plan_name = prefs.get("plan_name", "unknown")
 
@@ -317,8 +302,7 @@ def get_plan_savings(days: int = 30) -> str:
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=days)).isoformat()
 
-    result = client.rpc("get_usage_summary", {"p_start_date": start, "p_end_date": end}).execute()
-    rows = result.data or []
+    rows = _api_get("/api/usage-summary", {"start_date": start, "end_date": end}) or []
     api_cost = sum(float(r.get("total_cost", 0) or 0) for r in rows)
 
     # Scale to monthly if period != 30 days
@@ -401,18 +385,17 @@ def compare_periods(
         period_b: Second period (same options)
         machine_id: Optional UUID to filter to a specific machine
     """
-    client = _get_client()
     start_a, end_a, label_a = _resolve_period(period_a)
     start_b, end_b, label_b = _resolve_period(period_b)
 
-    params_a: dict[str, Any] = {"p_start_date": start_a, "p_end_date": end_a}
-    params_b: dict[str, Any] = {"p_start_date": start_b, "p_end_date": end_b}
-    if machine_id:
-        params_a["p_machine_id"] = machine_id
-        params_b["p_machine_id"] = machine_id
-
-    rows_a = client.rpc("get_usage_summary", params_a).execute().data or []
-    rows_b = client.rpc("get_usage_summary", params_b).execute().data or []
+    rows_a = _api_get(
+        "/api/usage-summary",
+        {"start_date": start_a, "end_date": end_a, "machine_id": machine_id},
+    ) or []
+    rows_b = _api_get(
+        "/api/usage-summary",
+        {"start_date": start_b, "end_date": end_b, "machine_id": machine_id},
+    ) or []
 
     cost_a, tokens_a = _sum_usage(rows_a)
     cost_b, tokens_b = _sum_usage(rows_b)
@@ -428,14 +411,14 @@ def compare_periods(
     ]
 
     # Top movers by project
-    proj_a_params: dict[str, Any] = {"p_start_date": start_a, "p_end_date": end_a}
-    proj_b_params: dict[str, Any] = {"p_start_date": start_b, "p_end_date": end_b}
-    if machine_id:
-        proj_a_params["p_machine_id"] = machine_id
-        proj_b_params["p_machine_id"] = machine_id
-
-    projs_a = client.rpc("get_project_costs", proj_a_params).execute().data or []
-    projs_b = client.rpc("get_project_costs", proj_b_params).execute().data or []
+    projs_a = _api_get(
+        "/api/project-costs",
+        {"start_date": start_a, "end_date": end_a, "machine_id": machine_id},
+    ) or []
+    projs_b = _api_get(
+        "/api/project-costs",
+        {"start_date": start_b, "end_date": end_b, "machine_id": machine_id},
+    ) or []
 
     cost_map_a = {p["project"]: float(p.get("total_cost", 0) or 0) for p in projs_a}
     cost_map_b = {p["project"]: float(p.get("total_cost", 0) or 0) for p in projs_b}
@@ -471,15 +454,13 @@ def get_trends(days: int = 30, machine_id: str | None = None) -> str:
     """
     import statistics
 
-    client = _get_client()
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=days)).isoformat()
 
-    params: dict[str, Any] = {"p_start_date": start, "p_end_date": end}
-    if machine_id:
-        params["p_machine_id"] = machine_id
-
-    rows = client.rpc("get_usage_summary", params).execute().data or []
+    rows = _api_get(
+        "/api/usage-summary",
+        {"start_date": start, "end_date": end, "machine_id": machine_id},
+    ) or []
 
     if len(rows) < 3:
         return f"Not enough data for trend analysis (need 3+ days, have {len(rows)})."
@@ -541,13 +522,10 @@ def detect_anomalies(days: int = 14, threshold_std: float = 2.0) -> str:
     """
     import statistics
 
-    client = _get_client()
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=days)).isoformat()
 
-    rows = client.rpc("get_usage_summary", {
-        "p_start_date": start, "p_end_date": end,
-    }).execute().data or []
+    rows = _api_get("/api/usage-summary", {"start_date": start, "end_date": end}) or []
 
     if len(rows) < 3:
         return f"Not enough data (need 3+ days, have {len(rows)})."
@@ -596,13 +574,10 @@ def compare_projects(project_a: str, project_b: str, days: int = 30) -> str:
         project_b: Second project name
         days: Look-back period in days (default 30)
     """
-    client = _get_client()
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=days)).isoformat()
 
-    rows = client.rpc("get_project_costs", {
-        "p_start_date": start, "p_end_date": end,
-    }).execute().data or []
+    rows = _api_get("/api/project-costs", {"start_date": start, "end_date": end}) or []
 
     proj_map = {r["project"]: r for r in rows}
     a = proj_map.get(project_a)
@@ -653,14 +628,11 @@ def get_cost_forecast(days_ahead: int = 7) -> str:
     """
     import statistics
 
-    client = _get_client()
     lookback = 14
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=lookback)).isoformat()
 
-    rows = client.rpc("get_usage_summary", {
-        "p_start_date": start, "p_end_date": end,
-    }).execute().data or []
+    rows = _api_get("/api/usage-summary", {"start_date": start, "end_date": end}) or []
 
     if len(rows) < 3:
         return f"Not enough data for forecast (need 3+ days, have {len(rows)})."

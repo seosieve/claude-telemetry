@@ -1,22 +1,32 @@
-import { fetchAllRows, serviceHeaders, type SupabaseEnv } from "./_lib";
+import { db, type Env } from "./_lib";
 
-export const onRequestGet: PagesFunction<SupabaseEnv> = async (context) => {
+export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const machine_id = url.searchParams.get("machine_id");
   const project = url.searchParams.get("project");
   const format = url.searchParams.get("format") || "csv";
 
-  const filters: string[] = ["order=cost_usd.desc"];
-  if (machine_id) filters.push(`machine_id=eq.${machine_id}`);
-  if (project) filters.push(`project=eq.${project}`);
+  // Build WHERE clause from filters using parameterized placeholders ($1, $2, ...).
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (machine_id && uuidRe.test(machine_id)) {
+    params.push(machine_id);
+    conditions.push(`machine_id = $${params.length}`);
+  }
+  if (project) {
+    params.push(project);
+    conditions.push(`project = $${params.length}`);
+  }
 
-  const query = `?${filters.join("&")}`;
+  const whereClause = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
 
-  // Page through ALL rows — a plain fetch caps at 1000 and silently drops the
-  // rest (sessions already exceeds that), so exports were losing data.
-  const data = await fetchAllRows(
-    `${context.env.SUPABASE_URL}/rest/v1/sessions${query}`,
-    serviceHeaders(context.env),
+  const sql = db(context.env);
+
+  // Full export — no 1000-row cap in SQL, so just select everything that matches.
+  const data = await sql.query(
+    `select * from sessions ${whereClause} order by cost_usd desc`,
+    params,
   );
 
   if (format === "json") {

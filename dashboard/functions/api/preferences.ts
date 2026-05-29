@@ -1,130 +1,90 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { db, json, type Env } from "./_lib";
 
-async function getUserId(request: Request, env: Env): Promise<string | null> {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
+// Guest mode: a single fixed user_id row holds all preferences.
+// (Neon has no GoTrue auth; the dashboard runs as one shared guest.)
+const GUEST_USER_ID = "00000000-0000-0000-0000-000000000000";
 
-  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!res.ok) return null;
-  const user = (await res.json()) as { id: string };
-  return user.id;
-}
+// JSONB columns that must be bound as ${JSON.stringify(v)}::jsonb.
+const JSONB_KEYS = new Set(["project_budgets", "alert_thresholds", "notifications"]);
+
+// Fields the client is allowed to write.
+const ALLOWED = [
+  "plan_cost",
+  "plan_name",
+  "project_budgets",
+  "alert_thresholds",
+  "week_start_day",
+  "theme",
+  "notifications",
+] as const;
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
-  const userId = await getUserId(context.request, context.env);
-  if (!userId) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
+  const sql = db(context.env);
+
+  // Fetch existing preferences for the guest row.
+  const existing = await sql`
+    select * from user_preferences
+    where user_id = ${GUEST_USER_ID}
+    limit 1
+  `;
+
+  if (existing.length > 0) {
+    return json(existing[0]);
   }
 
-  // Try to fetch existing preferences
-  const getRes = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/user_preferences?user_id=eq.${userId}`,
-    {
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
+  // Auto-create with defaults (matches the table's column defaults).
+  const created = await sql`
+    insert into user_preferences (
+      user_id, plan_cost, plan_name, project_budgets,
+      alert_thresholds, week_start_day, theme
+    ) values (
+      ${GUEST_USER_ID}, ${null}, ${"none"}, ${JSON.stringify({})}::jsonb,
+      ${JSON.stringify({ daily: 20, weekly: 100 })}::jsonb, ${"monday"}, ${"dark"}
+    )
+    on conflict (user_id) do update set user_id = excluded.user_id
+    returning *
+  `;
 
-  const rows = (await getRes.json()) as Array<Record<string, unknown>>;
-
-  if (rows.length > 0) {
-    return new Response(JSON.stringify(rows[0]), {
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  // Auto-create with defaults
-  const defaults = {
-    user_id: userId,
-    plan_cost: null,
-    plan_name: "none",
-    project_budgets: {},
-    alert_thresholds: { daily: 20, weekly: 100 },
-    week_start_day: "monday",
-    theme: "dark",
-  };
-
-  const insertRes = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/user_preferences`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify(defaults),
-    },
-  );
-
-  const created = await insertRes.json();
-  const result = Array.isArray(created) ? created[0] : created;
-
-  return new Response(JSON.stringify(result), {
-    headers: { "Content-Type": "application/json" },
-  });
+  return json(created[0]);
 };
 
-export const onRequestPut: PagesFunction<Env> = async (context) => {
-  const userId = await getUserId(context.request, context.env);
-  if (!userId) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
+async function upsertPreferences(context: Parameters<PagesFunction<Env>>[0]): Promise<Response> {
   const body = (await context.request.json()) as Record<string, unknown>;
 
-  // Only allow updating known fields
-  const allowed = [
-    "plan_cost",
-    "plan_name",
-    "project_budgets",
-    "alert_thresholds",
-    "week_start_day",
-    "theme",
-    "notifications",
-  ];
-  const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  for (const key of allowed) {
-    if (key in body) update[key] = body[key];
+  // Collect the writable fields present in the body.
+  const cols: string[] = ["user_id"];
+  const placeholders: string[] = ["$1"];
+  const params: unknown[] = [GUEST_USER_ID];
+  const updateSets: string[] = [];
+
+  for (const key of ALLOWED) {
+    if (!(key in body)) continue;
+    const value = JSONB_KEYS.has(key) ? JSON.stringify(body[key]) : body[key];
+    params.push(value);
+    const idx = params.length;
+    const cast = JSONB_KEYS.has(key) ? "::jsonb" : "";
+    cols.push(key);
+    placeholders.push(`$${idx}${cast}`);
+    updateSets.push(`${key} = excluded.${key}`);
   }
 
-  const res = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/user_preferences?user_id=eq.${userId}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify(update),
-    },
+  // Always bump updated_at on write.
+  cols.push("updated_at");
+  placeholders.push("now()");
+  updateSets.push("updated_at = excluded.updated_at");
+
+  const sql = db(context.env);
+  const rows = await sql.query(
+    `insert into user_preferences (${cols.join(", ")})
+     values (${placeholders.join(", ")})
+     on conflict (user_id) do update set ${updateSets.join(", ")}
+     returning *`,
+    params,
   );
 
-  const updated = await res.json();
-  const result = Array.isArray(updated) ? updated[0] : updated;
+  return json(rows[0]);
+}
 
-  return new Response(JSON.stringify(result), {
-    status: res.status,
-    headers: { "Content-Type": "application/json" },
-  });
-};
+export const onRequestPut: PagesFunction<Env> = (context) => upsertPreferences(context);
+
+export const onRequestPost: PagesFunction<Env> = (context) => upsertPreferences(context);

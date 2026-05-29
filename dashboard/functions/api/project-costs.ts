@@ -1,7 +1,4 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { db, json, type Env } from "./_lib";
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
@@ -10,32 +7,21 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
   const machine_id = url.searchParams.get("machine_id");
 
   if (!start_date || !end_date) {
-    return new Response(
-      JSON.stringify({ error: "start_date and end_date are required" }),
-      { status: 400, headers: { "Content-Type": "application/json" } },
-    );
+    return json({ error: "start_date and end_date are required" }, 400);
   }
 
-  const response = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/rpc/get_project_costs`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-      body: JSON.stringify({
-        p_start_date: start_date,
-        p_end_date: end_date,
-        p_machine_id: machine_id || null,
-      }),
-    },
-  );
+  // Validate UUID format when a machine filter is supplied. This endpoint is
+  // unauthenticated under guest mode, so reject anything that isn't a
+  // well-formed machine id before binding it into SQL.
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (machine_id && !uuidRe.test(machine_id)) {
+    return json({ error: "valid machine id (uuid) is required" }, 400);
+  }
 
-  const data = await response.json();
-  return new Response(JSON.stringify(data), {
-    status: response.status,
-    headers: { "Content-Type": "application/json" },
-  });
+  const sql = db(context.env);
+  const rows = await sql`
+    select * from get_project_costs(${start_date}, ${end_date}, ${machine_id || null})
+  `;
+
+  return json(rows);
 };

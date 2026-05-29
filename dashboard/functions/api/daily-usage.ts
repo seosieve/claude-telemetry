@@ -1,6 +1,6 @@
-import { fetchAllRows, serviceHeaders, type SupabaseEnv } from "./_lib";
+import { db, json, type Env } from "./_lib";
 
-export const onRequestGet: PagesFunction<SupabaseEnv> = async (context) => {
+export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const start_date = url.searchParams.get("start_date");
   const end_date = url.searchParams.get("end_date");
@@ -8,24 +8,41 @@ export const onRequestGet: PagesFunction<SupabaseEnv> = async (context) => {
   const project = url.searchParams.get("project");
   const model = url.searchParams.get("model");
 
-  const filters: string[] = [];
-  if (start_date) filters.push(`date=gte.${start_date}`);
-  if (end_date) filters.push(`date=lte.${end_date}`);
-  if (machine_id) filters.push(`machine_id=eq.${machine_id}`);
-  if (project) filters.push(`project=eq.${project}`);
-  if (model) filters.push(`model=eq.${model}`);
+  // Only allow UUID format for machine_id (matches the rest of the API surface).
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  const query = filters.length > 0 ? `?${filters.join("&")}&order=date.desc` : "?order=date.desc";
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (start_date) {
+    params.push(start_date);
+    conditions.push(`date >= $${params.length}`);
+  }
+  if (end_date) {
+    params.push(end_date);
+    conditions.push(`date <= $${params.length}`);
+  }
+  if (machine_id && uuidRe.test(machine_id)) {
+    params.push(machine_id);
+    conditions.push(`machine_id = $${params.length}::uuid`);
+  }
+  if (project) {
+    params.push(project);
+    conditions.push(`project = $${params.length}`);
+  }
+  if (model) {
+    params.push(model);
+    conditions.push(`model = $${params.length}`);
+  }
 
-  // Page through ALL matching rows. Charts depend on the full range; a plain
-  // fetch caps at 1000 and the missing older days would silently render as 0.
-  const data = await fetchAllRows(
-    `${context.env.SUPABASE_URL}/rest/v1/daily_usage${query}`,
-    serviceHeaders(context.env),
+  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+
+  // Charts depend on the full matching range, so select every row (the old
+  // PostgREST path paged past the 1000-row cap; plain SQL has no such limit).
+  const sql = db(context.env);
+  const data = await sql.query(
+    `select * from daily_usage ${where} order by date desc`,
+    params,
   );
 
-  return new Response(JSON.stringify(data), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  return json(data, 200);
 };

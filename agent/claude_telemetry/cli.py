@@ -386,29 +386,16 @@ def setup(
 @click.option("--daily-only", is_flag=True, help="Only sync daily usage data")
 @click.option("--force", is_flag=True, help="Resend all data (ignore last_sync)")
 def sync(verbose: bool, daily_only: bool, force: bool) -> None:
-    """Collect data from ccusage and sync to Supabase."""
-    from supabase import create_client
+    """Collect data from ccusage and POST it to the dashboard ingest endpoint."""
     from .sync import sync_daily_usage, sync_sessions, sync_rate_limits, sync_stats_extra, sync_blocks
 
     config = load_config()
     machine_id = config["machine_id"]
-    client = create_client(config["supabase_url"], config["supabase_service_key"])
+    api_key = config["api_key"]
 
     click.echo(f"Syncing machine: {config['machine_name']} ({machine_id[:8]}...)")
-
-    # Ensure machine is registered (fixes FK constraint failures)
-    try:
-        client.table("machines").upsert({
-            "id": machine_id,
-            "name": config["machine_name"],
-            "api_key": config.get("api_key", ""),
-            "os": detect_os(),
-            "hostname": platform.node(),
-        }, on_conflict="id").execute()
-    except Exception as e:
-        click.echo(f"\n  ERROR: Cannot register machine in Supabase: {e}", err=True)
-        click.echo("  Check your supabase_url and supabase_service_key in config.", err=True)
-        raise SystemExit(1)
+    # Machine registration / last_sync_at are handled server-side by the ingest
+    # endpoint (resolved from api_key), so no DB write here.
 
     # Daily usage
     click.echo("\n  Collecting daily usage...", nl=False)
@@ -425,7 +412,7 @@ def sync(verbose: bool, daily_only: bool, force: bool) -> None:
         if len(daily) > 5:
             click.echo(f"    ... and {len(daily) - 5} more")
 
-    result = sync_daily_usage(daily, machine_id, client, force=force)
+    result = sync_daily_usage(daily, api_key, force=force)
     click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
     if result.errors:
         for err in result.errors:
@@ -443,7 +430,7 @@ def sync(verbose: bool, daily_only: bool, force: bool) -> None:
         for s in sessions[:5]:
             click.echo(f"    {s.session_id[:40]} | {s.project} | ${s.cost_usd:.4f}")
 
-    result = sync_sessions(sessions, machine_id, client, force=force)
+    result = sync_sessions(sessions, api_key, force=force)
     click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
     if result.errors:
         for err in result.errors:
@@ -455,7 +442,7 @@ def sync(verbose: bool, daily_only: bool, force: bool) -> None:
         rate_data = collect_rate_limits(ccost_path=config.get("features", {}).get("ccost_path"))
         if rate_data:
             click.echo(f" {len(rate_data)} records")
-            result = sync_rate_limits(rate_data, machine_id, client)
+            result = sync_rate_limits(rate_data, api_key)
             click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
         else:
             click.echo(" skipped (ccost unavailable)")
@@ -466,7 +453,7 @@ def sync(verbose: bool, daily_only: bool, force: bool) -> None:
     stats = read_stats_cache(claude_dir)
     if stats:
         click.echo(" found")
-        result = sync_stats_extra(stats, machine_id, client)
+        result = sync_stats_extra(stats, api_key)
         click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
     else:
         click.echo(" not found")
@@ -476,7 +463,7 @@ def sync(verbose: bool, daily_only: bool, force: bool) -> None:
     blocks = collect_blocks_usage()
     click.echo(f" {len(blocks)} blocks")
     if blocks:
-        result = sync_blocks(blocks, machine_id, client)
+        result = sync_blocks(blocks, api_key)
         click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
         if result.errors:
             for err in result.errors:
@@ -855,7 +842,7 @@ def doctor() -> None:
     config_ok = False
     try:
         config = load_config()
-        config_ok = bool(config.get("machine_id") and config.get("supabase_url"))
+        config_ok = bool(config.get("machine_id") and config.get("api_key"))
         name = config.get("machine_name", "?")
         mid = config.get("machine_id", "?")[:8]
         _check("Config valid", config_ok, f"{name} ({mid}...)", "Run: cc-telemetry setup")
@@ -863,17 +850,18 @@ def doctor() -> None:
         _check("Config valid", False, hint="Run: cc-telemetry setup")
         config = {}
 
-    # 4. Supabase reachable
+    # 4. Dashboard (ingest endpoint) reachable
     if config_ok:
         try:
-            from supabase import create_client
-            client = create_client(config["supabase_url"], config["supabase_service_key"])
-            client.table("machines").select("id").limit(1).execute()
-            _check("Supabase reachable", True, "connected")
+            import httpx
+            from .config import INGEST_BASE_URL
+            resp = httpx.get(f"{INGEST_BASE_URL}/api/machines", timeout=15)
+            resp.raise_for_status()
+            _check("Dashboard reachable", True, "connected")
         except Exception as e:
-            _check("Supabase reachable", False, hint=f"Check URL/key: {e}")
+            _check("Dashboard reachable", False, hint=f"Check network: {e}")
     else:
-        _check("Supabase reachable", False, hint="Fix config first")
+        _check("Dashboard reachable", False, hint="Fix config first")
 
     # 5. Statusline
     settings_path = Path.home() / ".claude" / "settings.json"
@@ -1153,7 +1141,8 @@ def status() -> None:
 
     click.echo(f"Machine:     {config.get('machine_name', 'unknown')}")
     click.echo(f"Machine ID:  {config.get('machine_id', 'N/A')}")
-    click.echo(f"Supabase:    {config.get('supabase_url', 'N/A')}")
+    from .config import INGEST_BASE_URL
+    click.echo(f"Dashboard:   {INGEST_BASE_URL}")
     click.echo(f"Claude dir:  {config.get('claude_data_dir', 'N/A')}")
     click.echo(f"ccost:       {'yes' if config.get('features', {}).get('ccost_installed') else 'no'}")
     click.echo()

@@ -21,6 +21,9 @@ dashboard/.wrangler/
 # ccost report files (contain local paths + cost figures); collector uses a
 # temp file, so any ccost*.json at repo root is a stray manual-run artifact.
 ccost*.json
+# wrangler local dev secrets (DATABASE_URL etc.)
+.dev.vars
+.dev.vars.*
 
 # OS
 .DS_Store

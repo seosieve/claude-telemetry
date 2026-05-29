@@ -10,6 +10,7 @@
     "deploy": "npm run build && npx wrangler pages deploy dist --project-name=claude-ricegang --branch=main --commit-dirty=true"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "@tanstack/react-query": "^5.100.10",
     "@tanstack/react-query-devtools": "^5.100.10",
     "react": "^18.3.1",

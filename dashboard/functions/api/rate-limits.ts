@@ -1,32 +1,29 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { db, json, type Env } from "./_lib";
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const machine_id = url.searchParams.get("machine_id");
-  const limit = url.searchParams.get("limit") || "50";
+  const limitParam = url.searchParams.get("limit") || "50";
 
-  const filters: string[] = [];
-  if (machine_id) filters.push(`machine_id=eq.${machine_id}`);
-  filters.push(`limit=${limit}`);
+  // Sanitize limit — clamp to a positive integer (default 50 on bad input).
+  const parsedLimit = parseInt(limitParam, 10);
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
 
-  const query = `?${filters.join("&")}&order=timestamp.desc`;
+  // Only allow UUID format for machine_id.
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const validMachineId = machine_id && uuidRe.test(machine_id) ? machine_id : null;
 
-  const response = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/rate_limits${query}`,
-    {
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
+  const sql = db(context.env);
 
-  const data = await response.json();
-  return new Response(JSON.stringify(data), {
-    status: response.status,
-    headers: { "Content-Type": "application/json" },
-  });
+  const text =
+    "select * from rate_limits" +
+    (validMachineId ? " where machine_id = $1" : "") +
+    " order by timestamp desc" +
+    (validMachineId ? " limit $2" : " limit $1");
+
+  const params = validMachineId ? [validMachineId, limit] : [limit];
+
+  const rows = await sql.query(text, params);
+
+  return json(rows, 200);
 };

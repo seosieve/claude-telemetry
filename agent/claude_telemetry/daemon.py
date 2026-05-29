@@ -36,22 +36,12 @@ def _setup_logging(verbose: bool = False) -> None:
 
 def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
     """Run one full sync cycle. Returns {source: records_upserted}."""
-    from supabase import create_client
     from .sync import sync_daily_usage, sync_sessions, sync_rate_limits, sync_stats_extra, sync_blocks
 
-    import platform as _platform
-
-    machine_id = config["machine_id"]
-    client = create_client(config["supabase_url"], config["supabase_service_key"])
+    api_key = config["api_key"]
     results: dict[str, int] = {}
-
-    # Ensure machine is registered (prevents FK failures)
-    client.table("machines").upsert({
-        "id": machine_id,
-        "name": config.get("machine_name", _platform.node()),
-        "api_key": config.get("api_key", ""),
-        "hostname": _platform.node(),
-    }, on_conflict="id").execute()
+    # Machine registration / last_sync_at are handled server-side by the ingest
+    # endpoint (resolved from api_key), so no DB write here.
 
     # Daily usage
     since = None
@@ -59,7 +49,7 @@ def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
     if last:
         since = last[:10].replace("-", "")
     daily = collect_daily_usage(since=since)
-    r = sync_daily_usage(daily, machine_id, client)
+    r = sync_daily_usage(daily, api_key)
     results["daily_usage"] = r.records_upserted
     if r.errors:
         for err in r.errors:
@@ -67,7 +57,7 @@ def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
 
     # Sessions
     sessions = collect_session_usage()
-    r = sync_sessions(sessions, machine_id, client)
+    r = sync_sessions(sessions, api_key)
     results["sessions"] = r.records_upserted
     if r.errors:
         for err in r.errors:
@@ -77,20 +67,20 @@ def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
     if config.get("features", {}).get("ccost_installed"):
         rate_data = collect_rate_limits(ccost_path=config.get("features", {}).get("ccost_path"))
         if rate_data:
-            r = sync_rate_limits(rate_data, machine_id, client)
+            r = sync_rate_limits(rate_data, api_key)
             results["rate_limits"] = r.records_upserted
 
     # Stats extra
     claude_dir = Path(config.get("claude_data_dir", str(Path.home() / ".claude")))
     stats = read_stats_cache(claude_dir)
     if stats:
-        r = sync_stats_extra(stats, machine_id, client)
+        r = sync_stats_extra(stats, api_key)
         results["stats_extra"] = r.records_upserted
 
     # Blocks
     blocks = collect_blocks_usage()
     if blocks:
-        r = sync_blocks(blocks, machine_id, client)
+        r = sync_blocks(blocks, api_key)
         results["blocks"] = r.records_upserted
 
     return results

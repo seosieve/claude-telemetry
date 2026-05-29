@@ -13,6 +13,12 @@ from typing import Any
 CONFIG_DIR = Path.home() / ".claude-telemetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+# Agents POST telemetry to the dashboard's ingest endpoint instead of writing to
+# the database directly. Hardcoded here (not in config.json) so swapping the DB
+# never requires touching each PC's config — auth is the machines.api_key that
+# is already stored in config.json.
+INGEST_BASE_URL = "https://claude-ricegang.pages.dev"
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "machine_id": None,
     "machine_name": None,

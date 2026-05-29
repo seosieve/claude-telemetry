@@ -1,7 +1,4 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { db, json, type Env } from "./_lib";
 
 function generateUUID(): string {
   return crypto.randomUUID();
@@ -21,54 +18,30 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   };
 
   if (!body.name) {
-    return new Response(
-      JSON.stringify({ error: "name is required" }),
-      { status: 400, headers: { "Content-Type": "application/json" } },
-    );
+    return json({ error: "name is required" }, 400);
   }
 
   const machine_id = generateUUID();
   const api_key = generateApiKey();
 
-  // Insert machine into Supabase
-  const response = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/machines`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify({
-        id: machine_id,
-        name: body.name,
-        api_key,
-        os: body.os || null,
-        hostname: body.name,
-      }),
-    },
-  );
-
-  if (!response.ok) {
-    const err = await response.text();
-    return new Response(
-      JSON.stringify({ error: `Failed to register machine: ${err}` }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
+  // Register the machine in Neon.
+  try {
+    const sql = db(context.env);
+    await sql`
+      insert into machines (id, name, api_key, os, hostname)
+      values (${machine_id}, ${body.name}, ${api_key}, ${body.os || null}, ${body.name})
+    `;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return json({ error: `Failed to register machine: ${message}` }, 500);
   }
 
-  // NOTE: never return SUPABASE_SERVICE_KEY here. With the guest-mode
-  // middleware this endpoint is unauthenticated, so echoing the service_role
-  // key would hand a DB master key to anyone who knows the URL. The key is
-  // copied manually from the Supabase dashboard during agent setup instead.
-  return new Response(
-    JSON.stringify({
-      machine_id,
-      api_key,
-      supabase_url: context.env.SUPABASE_URL,
-    }),
-    { headers: { "Content-Type": "application/json" } },
-  );
+  // NOTE: never return a DB credential here. With the guest-mode middleware
+  // this endpoint is unauthenticated, so echoing the connection string / any
+  // master key would hand the DB to anyone who knows the URL. The agent gets
+  // its DATABASE_URL out-of-band during setup, not from this response.
+  return json({
+    machine_id,
+    api_key,
+  });
 };

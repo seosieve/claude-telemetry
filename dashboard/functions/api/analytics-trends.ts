@@ -3,23 +3,7 @@
  * Returns: direction, slope, avg, stdev, first/second half comparison, 7-day projection.
  */
 
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
-
-async function supabaseRpc(env: Env, fn: string, params: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: env.SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-    },
-    body: JSON.stringify(params),
-  });
-  return res.json();
-}
+import { db, json, type Env } from "./_lib";
 
 function daysAgoISO(n: number): string {
   const d = new Date();
@@ -55,19 +39,19 @@ function stdev(arr: number[]): number {
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
   const days = parseInt(url.searchParams.get("days") || "30", 10);
-  const machineId = url.searchParams.get("machine_id") || null;
 
-  const rows = await supabaseRpc(context.env, "get_usage_summary", {
-    p_start_date: daysAgoISO(days),
-    p_end_date: daysAgoISO(0),
-    p_machine_id: machineId,
-  }) as Array<{ date: string; total_cost: number; total_tokens: number }>;
+  // Only allow UUID format for machine_id; anything else is treated as null.
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const rawMachineId = url.searchParams.get("machine_id");
+  const machineId = rawMachineId && uuidRe.test(rawMachineId) ? rawMachineId : null;
+
+  const sql = db(context.env);
+  const rows = (await sql`
+    select * from get_usage_summary(${daysAgoISO(days)}, ${daysAgoISO(0)}, ${machineId})
+  `) as Array<{ date: string; total_cost: number; total_tokens: number }>;
 
   if (!rows || rows.length < 3) {
-    return new Response(JSON.stringify({ error: "Not enough data", rows: rows?.length || 0 }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return json({ error: "Not enough data", rows: rows?.length || 0 }, 200);
   }
 
   const costs = rows.map((r) => Number(r.total_cost) || 0);
@@ -102,7 +86,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     };
   });
 
-  return new Response(JSON.stringify({
+  return json({
     direction,
     slope: Math.round(slope * 10000) / 10000,
     avg: Math.round(avg * 100) / 100,
@@ -116,5 +100,5 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     forecast_low: Math.round(forecast.reduce((s, f) => s + Math.max(0, f.predicted - sd), 0) * 100) / 100,
     forecast_high: Math.round(forecast.reduce((s, f) => s + f.predicted + sd, 0) * 100) / 100,
     daily_data: dailyData,
-  }), { headers: { "Content-Type": "application/json" } });
+  });
 };

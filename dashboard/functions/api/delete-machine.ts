@@ -1,7 +1,4 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { db, json, type Env } from "./_lib";
 
 export const onRequestDelete: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
@@ -11,29 +8,18 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
   // so reject anything that isn't a well-formed machine id before touching DB.
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!id || !uuidRe.test(id)) {
-    return new Response(
-      JSON.stringify({ error: "valid machine id (uuid) is required" }),
-      { status: 400, headers: { "Content-Type": "application/json" } },
-    );
+    return json({ error: "valid machine id (uuid) is required" }, 400);
   }
 
-  // Fetch machine name before deactivating (for response)
-  const getResponse = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/machines?id=eq.${id}&select=name`,
-    {
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
+  const sql = db(context.env);
 
-  const machines = (await getResponse.json()) as Array<{ name: string }>;
+  // Fetch machine name before deactivating (for response)
+  const machines = (await sql`
+    select name from machines where id = ${id}
+  `) as Array<{ name: string }>;
+
   if (!machines.length) {
-    return new Response(
-      JSON.stringify({ error: "Machine not found" }),
-      { status: 404, headers: { "Content-Type": "application/json" } },
-    );
+    return json({ error: "Machine not found" }, 404);
   }
 
   const machineName = machines[0].name;
@@ -42,29 +28,18 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
   // endpoint filters active_only by default, so the machine disappears from the
   // dashboard while its historical usage rows are preserved (no CASCADE wipe).
   // This keeps an unauthenticated call non-destructive and recoverable.
-  const deleteResponse = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/machines?id=eq.${id}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
+  try {
+    await sql`update machines set is_active = false where id = ${id}`;
+  } catch (err) {
+    return json(
+      {
+        error: `Failed to deactivate machine: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
       },
-      body: JSON.stringify({ is_active: false }),
-    },
-  );
-
-  if (!deleteResponse.ok) {
-    const err = await deleteResponse.text();
-    return new Response(
-      JSON.stringify({ error: `Failed to deactivate machine: ${err}` }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      500,
     );
   }
 
-  return new Response(
-    JSON.stringify({ success: true, deleted: machineName }),
-    { headers: { "Content-Type": "application/json" } },
-  );
+  return json({ success: true, deleted: machineName });
 };

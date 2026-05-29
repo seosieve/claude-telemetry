@@ -1,41 +1,35 @@
 // Shared helpers for Cloudflare Pages Functions.
-// Files prefixed with "_" are NOT exposed as routes, so this is a safe place
-// for code shared across endpoints.
+// Files prefixed with "_" are NOT exposed as routes.
+//
+// Data layer: Neon serverless driver over HTTP (works in the Workers runtime).
+// The DB is reached only by these server-side Functions via DATABASE_URL — never
+// exposed to clients — so there is no RLS / JWT; the connection string is the key.
 
-export interface SupabaseEnv {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
+import { neon, types, type NeonQueryFunction } from "@neondatabase/serverless";
+
+// The Neon driver returns NUMERIC and BIGINT as strings by default, whereas the
+// old PostgREST backend returned them as JSON numbers. Parse them back to
+// numbers once, here, so every endpoint and the dashboard (charts, arithmetic)
+// keep working unchanged.
+types.setTypeParser(1700, parseFloat); // NUMERIC
+types.setTypeParser(20, (v: string) => parseInt(v, 10)); // INT8 / BIGINT
+types.setTypeParser(1082, (v: string) => v); // DATE → keep "YYYY-MM-DD" (avoid Date→ISO/timezone drift)
+
+export interface Env {
+  DATABASE_URL: string;
+  CRON_SECRET?: string;
+  ALLOWED_EMAILS?: string;
 }
 
-export function serviceHeaders(env: SupabaseEnv): Record<string, string> {
-  return {
-    apikey: env.SUPABASE_SERVICE_KEY,
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-  };
+// Returns a tagged-template SQL function: await sql`select ... ${val}`.
+// For dynamic SQL use sql.query(text, params) with $1, $2, ... placeholders.
+export function db(env: Env): NeonQueryFunction<false, false> {
+  return neon(env.DATABASE_URL);
 }
 
-// Fetch ALL rows from a PostgREST URL, paging past the default 1000-row cap via
-// Range headers. Without this, large tables (e.g. sessions) get silently
-// truncated and exports/charts lose data with no error surfaced anywhere.
-export async function fetchAllRows<T = Record<string, unknown>>(
-  url: string,
-  headers: Record<string, string>,
-  pageSize = 1000,
-): Promise<T[]> {
-  const all: T[] = [];
-  for (let from = 0; ; from += pageSize) {
-    const res = await fetch(url, {
-      headers: {
-        ...headers,
-        "Range-Unit": "items",
-        Range: `${from}-${from + pageSize - 1}`,
-      },
-    });
-    if (!res.ok) break;
-    const batch = (await res.json()) as T[];
-    if (!Array.isArray(batch)) break;
-    all.push(...batch);
-    if (batch.length < pageSize) break;
-  }
-  return all;
+export function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

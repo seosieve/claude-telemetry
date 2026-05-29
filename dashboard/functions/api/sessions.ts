@@ -1,7 +1,4 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { db, json, type Env } from "./_lib";
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const url = new URL(context.request.url);
@@ -17,50 +14,45 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   const offset = (page - 1) * per_page;
 
-  // Sanitize filter values — only allow UUID format for machine_id
+  // Build WHERE clause from filters using parameterized placeholders ($1, $2, ...).
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const filters: string[] = [];
-  if (machine_id && uuidRe.test(machine_id)) filters.push(`machine_id=eq.${machine_id}`);
-  if (project) filters.push(`project=eq.${encodeURIComponent(project)}`);
-  if (model) filters.push(`models=cs.{${encodeURIComponent(model)}}`);
-  if (is_subagent === "true") filters.push("is_subagent=eq.true");
-  if (is_subagent === "false") filters.push("is_subagent=eq.false");
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (machine_id && uuidRe.test(machine_id)) {
+    params.push(machine_id);
+    conditions.push(`machine_id = $${params.length}`);
+  }
+  if (project) {
+    params.push(project);
+    conditions.push(`project = $${params.length}`);
+  }
+  if (model) {
+    // PostgREST cs.{model} = array contains → value = any(models)
+    params.push(model);
+    conditions.push(`$${params.length} = any(models)`);
+  }
+  if (is_subagent === "true") conditions.push("is_subagent = true");
+  if (is_subagent === "false") conditions.push("is_subagent = false");
 
-  const filterQuery = filters.length > 0 ? `&${filters.join("&")}` : "";
+  const whereClause = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
 
-  // Get total count
-  const countResponse = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/sessions?select=id${filterQuery}`,
-    {
-      method: "HEAD",
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-        Prefer: "count=exact",
-      },
-    },
+  const sql = db(context.env);
+
+  // Total count (exact) with the same filters.
+  const countRows = await sql.query(
+    `select count(*)::int as total from sessions ${whereClause}`,
+    params,
   );
-  const contentRange = countResponse.headers.get("content-range") || "*/0";
-  const total = parseInt(contentRange.split("/").pop() || "0", 10);
+  const total = (countRows[0]?.total as number) ?? 0;
 
-  // Get paginated data
-  const dataResponse = await fetch(
-    `${context.env.SUPABASE_URL}/rest/v1/sessions?order=${sort}.${order}.nullslast&offset=${offset}&limit=${per_page}${filterQuery}`,
-    {
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-    },
+  // Paginated data — sort column is whitelisted, order is asc/desc, nulls last.
+  const dataParams = [...params, per_page, offset];
+  const limitIdx = dataParams.length - 1; // $ for per_page
+  const offsetIdx = dataParams.length; // $ for offset
+  const data = await sql.query(
+    `select * from sessions ${whereClause} order by ${sort} ${order} nulls last limit $${limitIdx} offset $${offsetIdx}`,
+    dataParams,
   );
 
-  const data = await dataResponse.json();
-
-  return new Response(
-    JSON.stringify({ data, total, page, per_page }),
-    {
-      status: dataResponse.status,
-      headers: { "Content-Type": "application/json" },
-    },
-  );
+  return json({ data, total, page, per_page });
 };

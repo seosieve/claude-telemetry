@@ -49,11 +49,7 @@ def _touch_lock() -> None:
 
 
 def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
-    """Single sync cycle — collect data and upsert to Supabase."""
-    import platform as _platform
-
-    from supabase import create_client
-
+    """Single sync cycle — collect data and POST to the ingest endpoint."""
     from .collector import (
         collect_daily_usage,
         collect_session_usage,
@@ -62,16 +58,9 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
     )
     from .sync import sync_daily_usage, sync_sessions, sync_blocks, sync_rate_limits
 
-    machine_id = config["machine_id"]
-    client = create_client(config["supabase_url"], config["supabase_service_key"])
-
-    # Ensure machine is registered
-    client.table("machines").upsert({
-        "id": machine_id,
-        "name": config.get("machine_name", _platform.node()),
-        "api_key": config.get("api_key", ""),
-        "hostname": _platform.node(),
-    }, on_conflict="id").execute()
+    api_key = config["api_key"]
+    # Machine registration and last_sync_at are handled server-side by the
+    # ingest endpoint (it resolves the machine from api_key), so no DB write here.
 
     results: dict[str, int] = {}
 
@@ -81,18 +70,18 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
     if last:
         since = last[:10].replace("-", "")
     daily = collect_daily_usage(since=since)
-    r = sync_daily_usage(daily, machine_id, client)
+    r = sync_daily_usage(daily, api_key)
     results["daily_usage"] = r.records_upserted
 
     # Sessions
     sessions = collect_session_usage()
-    r = sync_sessions(sessions, machine_id, client)
+    r = sync_sessions(sessions, api_key)
     results["sessions"] = r.records_upserted
 
     # Blocks
     blocks = collect_blocks_usage()
     if blocks:
-        r = sync_blocks(blocks, machine_id, client)
+        r = sync_blocks(blocks, api_key)
         results["blocks"] = r.records_upserted
 
     # Rate limits (ccost) — keeps the 5h percent and reset countdown fresh
@@ -100,7 +89,7 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
         config.get("features", {}).get("ccost_path"),
     )
     if rate_limits:
-        r = sync_rate_limits(rate_limits, machine_id, client)
+        r = sync_rate_limits(rate_limits, api_key)
         results["rate_limits"] = r.records_upserted
 
     total = sum(results.values())
