@@ -1,16 +1,45 @@
+const KST_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function kstDate(d: Date): string {
+  return KST_FORMATTER.format(d);
+}
+
 export function daysAgo(n: number): string {
   const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  d.setUTCDate(d.getUTCDate() - n);
+  return kstDate(d);
 }
 
 export function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return kstDate(new Date());
 }
 
 export function rangeToDate(range: string): { start: string; end: string } {
   const days = range === "7d" ? 7 : range === "90d" ? 90 : 30;
   return { start: daysAgo(days), end: today() };
+}
+
+export function fillDateGaps<T extends { date: string }>(
+  rows: T[],
+  start: string,
+  end: string,
+  makeEmpty: (date: string) => T,
+): T[] {
+  const byDate = new Map(rows.map((r) => [r.date, r]));
+  const out: T[] = [];
+  const cur = new Date(start + "T00:00:00Z");
+  const last = new Date(end + "T00:00:00Z");
+  while (cur <= last) {
+    const k = cur.toISOString().slice(0, 10);
+    out.push(byDate.get(k) ?? makeEmpty(k));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
 }
 
 export interface WeeklyData {
@@ -79,6 +108,45 @@ export function groupByWeek(
   return Array.from(weekMap.values()).sort((a, b) =>
     a.startDate.localeCompare(b.startDate),
   );
+}
+
+export function formatKstDate(isoUtc: string | null | undefined): string {
+  if (!isoUtc) return "—";
+  const d = new Date(isoUtc);
+  if (isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function formatKstTimestamp(
+  isoUtc: string | null | undefined,
+  opts: { withSeconds?: boolean } = {},
+): string {
+  if (!isoUtc) return "never";
+  const d = new Date(isoUtc);
+  if (isNaN(d.getTime())) return "never";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: opts.withSeconds ? "2-digit" : undefined,
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const date = `${get("year")}-${get("month")}-${get("day")}`;
+  const time = opts.withSeconds
+    ? `${get("hour")}:${get("minute")}:${get("second")}`
+    : `${get("hour")}:${get("minute")}`;
+  return `${date} ${time} KST`;
 }
 
 export function formatTokens(n: number): string {

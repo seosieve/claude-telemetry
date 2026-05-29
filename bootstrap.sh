@@ -17,12 +17,17 @@
 
 set -eu
 
-FORK_URL="git+https://github.com/seosieve/claude-telemetry@main#subdirectory=agent"
+# Pin to a git tag, not a moving branch. Bump FORK_REF when you tag a new
+# stable release so machines converge on it; pushing to main no longer
+# auto-deploys to every PC the same night.
+FORK_REF="v0.3.4"
+FORK_URL="git+https://github.com/seosieve/claude-telemetry@${FORK_REF}#subdirectory=agent"
 DAEMON_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.plist"
 UPGRADE_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.auto-upgrade.plist"
 UPGRADE_LABEL="com.cc-telemetry.auto-upgrade"
 LOG_DIR="$HOME/.cc-telemetry"
 PIPX_BIN="$HOME/.local/bin/pipx"
+CC_BIN="$HOME/.local/bin/cc-telemetry"
 
 if [ "$(uname)" != "Darwin" ]; then
     echo "bootstrap.sh: only macOS is supported (uname=$(uname))." >&2
@@ -40,8 +45,16 @@ fi
 
 mkdir -p "$LOG_DIR"
 
-echo "[1/4] Installing cc-telemetry from RiceGang fork..."
+echo "[1/4] Installing cc-telemetry from RiceGang fork (${FORK_REF})..."
 "$PIPX_BIN" install --force "$FORK_URL"
+
+# Self-check: confirm the freshly installed CLI actually runs before we restart
+# the daemon. A broken build (bad commit, dep conflict) should fail loudly here
+# instead of silently taking this machine's collector offline.
+if ! "$CC_BIN" --help >/dev/null 2>&1 && ! cc-telemetry --help >/dev/null 2>&1; then
+    echo "bootstrap.sh: cc-telemetry failed to run after install — aborting before daemon restart." >&2
+    exit 1
+fi
 
 echo "[2/4] Restarting cc-telemetry daemon..."
 if [ -f "$DAEMON_PLIST" ]; then
@@ -63,7 +76,7 @@ cat > "$UPGRADE_PLIST" <<PLIST
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>${PIPX_BIN} install --force ${FORK_URL} &amp;&amp; (launchctl unload ${DAEMON_PLIST} 2&gt;/dev/null; launchctl load ${DAEMON_PLIST})</string>
+        <string>${PIPX_BIN} install --force ${FORK_URL} &amp;&amp; ${CC_BIN} --help &gt;/dev/null 2&gt;&amp;1 &amp;&amp; (launchctl unload ${DAEMON_PLIST} 2&gt;/dev/null; launchctl load ${DAEMON_PLIST})</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -93,5 +106,5 @@ else
 fi
 
 echo ""
-echo "Done. This machine will auto-upgrade daily at 05:10 from $FORK_URL."
+echo "Done. This machine will auto-upgrade daily at 05:10 from $FORK_URL (pinned to $FORK_REF)."
 echo "Logs: $LOG_DIR/auto-upgrade.log"

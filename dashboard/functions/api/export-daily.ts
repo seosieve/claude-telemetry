@@ -1,9 +1,6 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { fetchAllRows, serviceHeaders, type SupabaseEnv } from "./_lib";
 
-export const onRequestGet: PagesFunction<Env> = async (context) => {
+export const onRequestGet: PagesFunction<SupabaseEnv> = async (context) => {
   const url = new URL(context.request.url);
   const start_date = url.searchParams.get("start_date");
   const end_date = url.searchParams.get("end_date");
@@ -17,17 +14,12 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   const query = `?${filters.join("&")}`;
 
-  const response = await fetch(
+  // Page through ALL rows — daily_usage is append-only and will eventually
+  // cross the 1000-row cap, so paginate now to avoid silent truncation.
+  const data = await fetchAllRows(
     `${context.env.SUPABASE_URL}/rest/v1/daily_usage${query}`,
-    {
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-    },
+    serviceHeaders(context.env),
   );
-
-  const data = (await response.json()) as Array<Record<string, unknown>>;
 
   if (format === "json") {
     return new Response(JSON.stringify(data, null, 2), {

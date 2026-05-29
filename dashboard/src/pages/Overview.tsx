@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "../components/cards/MetricCard";
 import { MachineCard } from "../components/cards/MachineCard";
 import { DailyCostChart } from "../components/charts/DailyCostChart";
@@ -10,34 +11,103 @@ import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { useUsageData } from "../hooks/useUsageData";
 import { usePreferences } from "../hooks/usePreferences";
 import { useMachineFilter } from "../hooks/useMachineFilter";
-import { fetchRateLimits } from "../lib/api";
-import { rangeToDate, formatTokens } from "../lib/dateUtils";
+import { fetchRateLimits, fetchMachines } from "../lib/api";
+import { rangeToDate, formatTokens, fillDateGaps } from "../lib/dateUtils";
 
 export function Overview() {
   const [range, setRange] = useState("30d");
   const dateRange = useMemo(() => rangeToDate(range), [range]);
-  const { summary, projects, machines, loading, error } = useUsageData(dateRange);
+  const { summary, projects, machines, loading, error } = useUsageData(dateRange, { polling: true });
   const { prefs } = usePreferences();
   const { machineId } = useMachineFilter();
 
-  const [rateLimits, setRateLimits] = useState<{
-    window_5h_percent?: number;
-    window_1w_percent?: number;
-  } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  const { data: machinesRaw } = useQuery({
+    queryKey: ["machines", { active_only: false }],
+    queryFn: () => fetchMachines(false) as Promise<Array<{ id: string; last_sync_at: string | null }>>,
+    refetchInterval: 30_000,
+  });
+  const syncMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of machinesRaw ?? []) {
+      if (r.last_sync_at) map.set(r.id, r.last_sync_at);
+    }
+    return map;
+  }, [machinesRaw]);
+
+  const { data: rateLimitsRecent } = useQuery({
+    queryKey: ["rate-limits", machineId, "10"],
+    queryFn: () => fetchRateLimits(machineId, "10") as Promise<Array<Record<string, unknown>>>,
+    refetchInterval: 30_000,
+  });
+  const { rateLimits, resetAtMs } = useMemo(() => {
+    if (!rateLimitsRecent) return { rateLimits: null, resetAtMs: null };
+    const nowMs = Date.now();
+    const row = rateLimitsRecent.find((r) => {
+      const ts = r.timestamp as string | undefined;
+      return ts ? new Date(ts).getTime() <= nowMs : false;
+    });
+    if (!row) return { rateLimits: null, resetAtMs: null };
+    const ts = row.timestamp as string | undefined;
+    const dur = row.session_duration_seconds as number | undefined;
+    const reset = ts && typeof dur === "number"
+      ? new Date(ts).getTime() + (5 * 3600 - dur) * 1000
+      : null;
+    return {
+      rateLimits: {
+        window_5h_percent: row.window_5h_percent as number | undefined,
+        window_1w_percent: row.window_1w_percent as number | undefined,
+      },
+      resetAtMs: reset,
+    };
+  }, [rateLimitsRecent]);
+
+  const { data: rateLimitsWeekly } = useQuery({
+    queryKey: ["rate-limits", undefined, "50"],
+    queryFn: () => fetchRateLimits(undefined, "50") as Promise<Array<Record<string, unknown>>>,
+    refetchInterval: 30_000,
+  });
+  const weeklyResetAtMs = useMemo(() => {
+    if (!rateLimitsWeekly) return null;
+    const row = rateLimitsWeekly.find((r) => r.weekly_reset_at);
+    const weeklyAt = row?.weekly_reset_at as string | undefined;
+    return weeklyAt ? new Date(weeklyAt).getTime() : null;
+  }, [rateLimitsWeekly]);
 
   useEffect(() => {
-    fetchRateLimits(machineId, "1")
-      .then((data) => {
-        const arr = data as Array<Record<string, unknown>>;
-        if (arr.length > 0) {
-          setRateLimits({
-            window_5h_percent: arr[0].window_5h_percent as number | undefined,
-            window_1w_percent: arr[0].window_1w_percent as number | undefined,
-          });
-        }
-      })
-      .catch((e) => { console.warn("Rate limits unavailable:", e.message); });
-  }, [machineId]);
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const resetLabel = useMemo(() => {
+    if (resetAtMs == null) return null;
+    const diffMs = resetAtMs - now;
+    if (diffMs <= 0) return null;
+    const totalMin = Math.floor(diffMs / 60_000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h > 0) return `Resets in ${h}h ${m}m`;
+    return `Resets in ${m}m`;
+  }, [resetAtMs, now]);
+
+  const weeklyResetLabel = useMemo(() => {
+    if (weeklyResetAtMs == null) return null;
+    const d = new Date(weeklyResetAtMs);
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Seoul",
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const weekday = get("weekday");
+    const h12 = get("hour");
+    const m = get("minute");
+    const ampm = get("dayPeriod");
+    return `Resets ${weekday} ${h12}:${m} ${ampm} KST`;
+  }, [weeklyResetAtMs]);
 
   const totalCost = summary.reduce((s, r) => s + r.total_cost, 0);
   const totalTokens = summary.reduce((s, r) => s + r.total_tokens, 0);
@@ -48,6 +118,20 @@ export function Overview() {
 
   const opusCost = summary.reduce((s, r) => s + r.opus_cost, 0);
   const opusPct = totalCost > 0 ? ((opusCost / totalCost) * 100).toFixed(0) : "0";
+
+  const filledSummary = useMemo(
+    () =>
+      fillDateGaps(summary, dateRange.start, dateRange.end, (date) => ({
+        date,
+        total_cost: 0,
+        total_tokens: 0,
+        opus_cost: 0,
+        sonnet_cost: 0,
+        haiku_cost: 0,
+        machine_count: 0,
+      })),
+    [summary, dateRange],
+  );
 
   if (error) {
     return (
@@ -134,30 +218,42 @@ export function Overview() {
         <div className="grid grid-cols-2 gap-4">
           {rateLimits.window_5h_percent != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-              <p className="text-xs font-medium text-slate-400 mb-2">Rate Limit (5h)</p>
+              <div className="flex items-baseline justify-between mb-2">
+                <p className="text-xs font-medium text-slate-400">Rate Limit (5h)</p>
+                {resetLabel && <p className="text-xs text-slate-500">{resetLabel}</p>}
+              </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
                   className={`h-3 rounded-full transition-all ${
-                    rateLimits.window_5h_percent > 80 ? "bg-rose-500" : rateLimits.window_5h_percent > 50 ? "bg-amber-500" : "bg-emerald-500"
+                    rateLimits.window_5h_percent > 80 ? "bg-fuchsia-500" : rateLimits.window_5h_percent > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
-                  style={{ width: `${Math.min(100, rateLimits.window_5h_percent)}%` }}
+                  style={{
+                    width: `${Math.min(100, rateLimits.window_5h_percent)}%`,
+                    minWidth: rateLimits.window_5h_percent > 0 ? "0.75rem" : undefined,
+                  }}
                 />
               </div>
-              <p className="mt-1 text-xs font-mono text-slate-400">{rateLimits.window_5h_percent.toFixed(1)}%</p>
+              <p className="mt-2 text-xs font-mono text-slate-400">{rateLimits.window_5h_percent.toFixed(0)}%</p>
             </div>
           )}
           {rateLimits.window_1w_percent != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-              <p className="text-xs font-medium text-slate-400 mb-2">Rate Limit (1w)</p>
+              <div className="flex items-baseline justify-between mb-2">
+                <p className="text-xs font-medium text-slate-400">Rate Limit (1w)</p>
+                {weeklyResetLabel && <p className="text-xs text-slate-500">{weeklyResetLabel}</p>}
+              </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
                   className={`h-3 rounded-full transition-all ${
-                    rateLimits.window_1w_percent > 80 ? "bg-rose-500" : rateLimits.window_1w_percent > 50 ? "bg-amber-500" : "bg-emerald-500"
+                    rateLimits.window_1w_percent > 80 ? "bg-fuchsia-500" : rateLimits.window_1w_percent > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
-                  style={{ width: `${Math.min(100, rateLimits.window_1w_percent)}%` }}
+                  style={{
+                    width: `${Math.min(100, rateLimits.window_1w_percent)}%`,
+                    minWidth: rateLimits.window_1w_percent > 0 ? "0.75rem" : undefined,
+                  }}
                 />
               </div>
-              <p className="mt-1 text-xs font-mono text-slate-400">{rateLimits.window_1w_percent.toFixed(1)}%</p>
+              <p className="mt-2 text-xs font-mono text-slate-400">{rateLimits.window_1w_percent.toFixed(0)}%</p>
             </div>
           )}
         </div>
@@ -166,7 +262,7 @@ export function Overview() {
       {/* Charts row */}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <DailyCostChart data={summary} />
+          <DailyCostChart data={filledSummary} />
         </div>
         <ModelBreakdown data={summary} />
       </div>
@@ -182,6 +278,7 @@ export function Overview() {
                 key={m.machine_id}
                 name={m.machine_name}
                 lastSync={m.last_activity}
+                lastSyncAt={syncMap.get(m.machine_id) ?? null}
                 cost={m.total_cost}
                 tokens={m.total_tokens}
                 topProject={m.top_project}

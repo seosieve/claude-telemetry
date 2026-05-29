@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import uuid
 from pathlib import Path
@@ -64,8 +65,22 @@ def load_config() -> dict[str, Any]:
 
 def save_config(config: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    # config.json holds the Supabase service_role key in plaintext, so keep the
+    # directory and file owner-only (0700/0600). No-op on Windows.
+    try:
+        os.chmod(CONFIG_DIR, 0o700)
+    except OSError:
+        pass
+    # Write to a temp file then atomically replace, so a crash mid-write can't
+    # leave a truncated config.json that breaks every subsequent sync.
+    tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(config, f, indent=2)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, CONFIG_FILE)
 
 
 def update_last_sync(source: str, timestamp: str) -> None:

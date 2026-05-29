@@ -190,7 +190,6 @@ export interface AgentConfig {
   machine_id: string;
   api_key: string;
   supabase_url: string;
-  service_key: string;
 }
 
 export async function generateAgentConfig(

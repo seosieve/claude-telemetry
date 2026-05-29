@@ -59,12 +59,15 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     );
   }
 
+  // NOTE: never return SUPABASE_SERVICE_KEY here. With the guest-mode
+  // middleware this endpoint is unauthenticated, so echoing the service_role
+  // key would hand a DB master key to anyone who knows the URL. The key is
+  // copied manually from the Supabase dashboard during agent setup instead.
   return new Response(
     JSON.stringify({
       machine_id,
       api_key,
       supabase_url: context.env.SUPABASE_URL,
-      service_key: context.env.SUPABASE_SERVICE_KEY,
     }),
     { headers: { "Content-Type": "application/json" } },
   );

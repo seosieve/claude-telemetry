@@ -1,43 +1,215 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useUsageData } from "../hooks/useUsageData";
-import { deleteMachine, fetchMachines } from "../lib/api";
-import { rangeToDate, formatTokens } from "../lib/dateUtils";
+import { deleteMachine, fetchMachines, fetchDailyUsage } from "../lib/api";
+import { rangeToDate, formatTokens, formatKstTimestamp, fillDateGaps } from "../lib/dateUtils";
 import { getStatusDisplay } from "../lib/machineStatus";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { ConfirmDeleteModal } from "../components/ConfirmDeleteModal";
 import {
   BarChart,
   Bar,
+  Cell,
+  Rectangle,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from "recharts";
+
+import { MACHINE_COLORS } from "../lib/colors";
+
+const MACHINE_ORDER = ["P성민", "K성민", "충원", "대성"];
+
+function sortByOrder<T extends { machine_name: string }>(arr: T[]): T[] {
+  return [...arr].sort((a, b) => {
+    const ai = MACHINE_ORDER.indexOf(a.machine_name);
+    const bi = MACHINE_ORDER.indexOf(b.machine_name);
+    if (ai === -1 && bi === -1) return a.machine_name.localeCompare(b.machine_name);
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+}
+
+function MachineSummaryTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: { machine_name: string; total_cost: number } }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  const orderIndex = MACHINE_ORDER.indexOf(row.machine_name);
+  const color =
+    orderIndex >= 0
+      ? MACHINE_COLORS[orderIndex % MACHINE_COLORS.length]
+      : MACHINE_COLORS[0];
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className="inline-block h-2 w-2 rounded-full"
+          style={{ backgroundColor: color }}
+        />
+        <span className="text-white">{row.machine_name}</span>
+        <span className="ml-auto font-mono font-medium text-white">
+          ${row.total_cost.toFixed(2)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function MachineDailyTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number; color: string }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const total = payload.reduce((s, p) => s + p.value, 0);
+  const ordered = [...payload].reverse().filter((p) => p.value > 0);
+  const weekdayLabel = (() => {
+    if (!label) return label;
+    const d = new Date(label + "T00:00:00");
+    if (isNaN(d.getTime())) return label;
+    const days = ["일", "월", "화", "수", "목", "금", "토"];
+    return `${label} (${days[d.getDay()]})`;
+  })();
+  if (total === 0) {
+    return (
+      <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+        <p className="mb-1 text-xs text-slate-300">{weekdayLabel}</p>
+        <p className="text-xs text-slate-500">사용 기록 없음</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+      <p className="mb-1 text-xs text-slate-300">{weekdayLabel}</p>
+      {ordered.map((p) => (
+        <div key={p.name} className="flex items-center gap-2 text-xs">
+          <span
+            className="inline-block h-2 w-2 rounded-full"
+            style={{ backgroundColor: p.color }}
+          />
+          <span className="text-white">{p.name}</span>
+          <span className="ml-auto font-mono font-medium text-white">
+            ${p.value.toFixed(2)}
+          </span>
+        </div>
+      ))}
+      <div className="mt-1 border-t border-slate-700 pt-1 text-xs font-medium text-white">
+        Total: <span className="font-mono">${total.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
 
 
 export function Machines() {
-  const [range, setRange] = useState("30d");
+  const [range, setRange] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 1024 ? "7d" : "30d",
+  );
   const dateRange = useMemo(() => rangeToDate(range), [range]);
-  const { machines, loading } = useUsageData(dateRange);
+  const { machines: rawMachines, loading } = useUsageData(dateRange, { polling: true });
+  const machines = useMemo(() => sortByOrder(rawMachines), [rawMachines]);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [, setRefresh] = useState(0);
+  const [soloMachine, setSoloMachine] = useState<string | null>(null);
+  const [pendingSolo, setPendingSolo] = useState<string | null>(null);
+  const [chartVisible, setChartVisible] = useState(false);
 
-  // Fetch last_sync_at from machines table (TIMESTAMPTZ, not DATE like get_machine_summary)
-  const [syncMap, setSyncMap] = useState<Map<string, string>>(new Map());
   useEffect(() => {
-    fetchMachines(false)
-      .then((rows) => {
-        const map = new Map<string, string>();
-        for (const r of rows as Array<{ id: string; last_sync_at: string | null }>) {
-          if (r.last_sync_at) map.set(r.id, r.last_sync_at);
-        }
-        setSyncMap(map);
-      })
-      .catch(() => {});
+    if (pendingSolo == null) return;
+    const t = setTimeout(() => {
+      setSoloMachine(pendingSolo);
+      setPendingSolo(null);
+    }, 180);
+    return () => clearTimeout(t);
+  }, [pendingSolo]);
+
+  const handleLegendToggle = useCallback((name: string) => {
+    setSoloMachine((prev) => {
+      if (prev === name) return null;
+      setPendingSolo(name);
+      return "__none__";
+    });
   }, []);
 
+  const { data: machinesRaw } = useQuery({
+    queryKey: ["machines", { active_only: false }],
+    queryFn: () => fetchMachines(false) as Promise<Array<{ id: string; last_sync_at: string | null }>>,
+    refetchInterval: 30_000,
+  });
+  const syncMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of machinesRaw ?? []) {
+      if (r.last_sync_at) map.set(r.id, r.last_sync_at);
+    }
+    return map;
+  }, [machinesRaw]);
+
   const totalCost = machines.reduce((s, m) => s + m.total_cost, 0);
+
+  const { data: dailyRows } = useQuery({
+    queryKey: ["daily-usage", dateRange.start, dateRange.end],
+    queryFn: () =>
+      fetchDailyUsage(dateRange.start, dateRange.end) as Promise<
+        Array<{ date: string; machine_id: string; cost_usd: number }>
+      >,
+    refetchInterval: 30_000,
+  });
+  const dailyByMachine = useMemo<Array<Record<string, number | string>>>(() => {
+    if (!dailyRows) return [];
+    const nameById = new Map(machines.map((m) => [m.machine_id, m.machine_name]));
+    const byDate = new Map<string, Record<string, number>>();
+    for (const r of dailyRows) {
+      const name = nameById.get(r.machine_id);
+      if (!name) continue;
+      const day = byDate.get(r.date) ?? {};
+      day[name] = (day[name] ?? 0) + Number(r.cost_usd ?? 0);
+      byDate.set(r.date, day);
+    }
+    const rows = Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, costs]) => ({ date, ...costs }));
+    const emptyMachineCosts = Object.fromEntries(
+      machines.map((m) => [m.machine_name, 0]),
+    );
+    return fillDateGaps(rows, dateRange.start, dateRange.end, (date) => ({
+      date,
+      ...emptyMachineCosts,
+    }));
+  }, [dailyRows, machines, dateRange]);
+
+  const filteredDailyByMachine = useMemo(() => {
+    if (!soloMachine) return dailyByMachine;
+    return dailyByMachine.map((row) => {
+      const out: Record<string, number | string> = {
+        date: row.date as string,
+      };
+      for (const m of machines) {
+        const v = row[m.machine_name];
+        out[m.machine_name] =
+          m.machine_name === soloMachine && typeof v === "number" ? v : 0;
+      }
+      return out;
+    });
+  }, [dailyByMachine, soloMachine, machines]);
+
+  useEffect(() => {
+    if (chartVisible || dailyByMachine.length === 0) return;
+    const t = setTimeout(() => setChartVisible(true), 400);
+    return () => clearTimeout(t);
+  }, [dailyByMachine.length, chartVisible]);
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
@@ -62,12 +234,6 @@ export function Machines() {
         </div>
         <div className="flex items-center gap-3">
           <DateRangePicker value={range} onChange={setRange} />
-          <a
-            href="#deploy"
-            className="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-600"
-          >
-            + Add Machine
-          </a>
         </div>
       </div>
 
@@ -101,17 +267,160 @@ export function Machines() {
                 width={120}
               />
               <Tooltip
-                formatter={(value: number) => [`$${value.toFixed(2)}`, "Cost"]}
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  border: "1px solid rgb(51,65,85)",
-                  borderRadius: 8,
-                  fontSize: 12,
-                }}
+                content={<MachineSummaryTooltip />}
+                cursor={{ fill: "rgba(148,163,184,0.08)" }}
               />
-              <Bar dataKey="total_cost" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
+              <Bar
+                dataKey="total_cost"
+                radius={[0, 4, 4, 0]}
+                shape={(props: object) => {
+                  const p = props as React.ComponentProps<typeof Rectangle> & {
+                    x?: number;
+                    width?: number;
+                  };
+                  const offset = 0.5;
+                  const w = Math.max(0, (p.width ?? 0) - offset);
+                  return <Rectangle {...p} x={(p.x ?? 0) + offset} width={w} />;
+                }}
+              >
+                {machines.map((m, i) => (
+                  <Cell key={m.machine_id} fill={MACHINE_COLORS[i % MACHINE_COLORS.length]} />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Daily breakdown by machine (stacked) */}
+      {machines.length > 0 && dailyByMachine.length > 0 && (
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <h3 className="mb-4 text-sm font-medium">Daily Cost by Machine</h3>
+          <div
+            style={{
+              opacity: chartVisible ? 1 : 0,
+              transition: "opacity 0.3s ease-out",
+            }}
+          >
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={filteredDailyByMachine} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 10, fill: "#94a3b8" }}
+                tickFormatter={(v: string) => v.slice(5)}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: "#94a3b8" }}
+                tickFormatter={(v: number) => `$${v}`}
+              />
+              <Tooltip
+                content={<MachineDailyTooltip />}
+                cursor={{ fill: "rgba(148,163,184,0.08)" }}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
+                iconType="circle"
+                iconSize={8}
+                onClick={(o: { value?: string }) => {
+                  if (!o.value) return;
+                  handleLegendToggle(o.value);
+                }}
+                formatter={(value: string) => (
+                  <span
+                    style={{
+                      opacity: soloMachine && soloMachine !== value ? 0.4 : 1,
+                    }}
+                  >
+                    {value}
+                  </span>
+                )}
+              />
+              {[...machines].reverse().map((m) => {
+                const originalIndex = machines.findIndex((x) => x.machine_id === m.machine_id);
+                return (
+                  <Bar
+                    key={m.machine_id}
+                    dataKey={m.machine_name}
+                    name={m.machine_name}
+                    stackId="cost"
+                    fill={MACHINE_COLORS[originalIndex % MACHINE_COLORS.length]}
+                    isAnimationActive={true}
+                    animationDuration={160}
+                    shape={(props: object) => {
+                      const p = props as {
+                        x: number;
+                        y: number;
+                        width: number;
+                        height: number;
+                        fill: string;
+                        payload?: Record<string, number | string>;
+                        name?: string;
+                      };
+                      const ownName = p.name;
+                      if (!ownName || !p.payload) return <g />;
+                      const ownCost = Number(p.payload[ownName] || 0);
+                      if (ownCost <= 0 || p.height <= 0) return <g />;
+
+                      const yScale = p.height / ownCost;
+                      const totalCost = machines.reduce(
+                        (s, mm) => s + Number(p.payload?.[mm.machine_name] || 0),
+                        0,
+                      );
+                      const totalHeight = totalCost * yScale;
+                      const selfIdx = machines.findIndex(
+                        (mm) => mm.machine_name === ownName,
+                      );
+                      const aboveCost = machines
+                        .slice(0, selfIdx)
+                        .reduce(
+                          (s, mm) => s + Number(p.payload?.[mm.machine_name] || 0),
+                          0,
+                        );
+                      const yOffset = 0.5;
+                      const stackTopY = p.y - aboveCost * yScale - yOffset;
+
+                      const date = String(p.payload.date ?? "");
+                      const safeDate = date.replace(/[^a-zA-Z0-9]/g, "");
+                      const clipId = `stack-clip-${safeDate}`;
+
+                      const r = Math.min(3, p.width / 2, totalHeight / 2);
+                      const sx = p.x;
+                      const sy = stackTopY;
+                      const sw = p.width;
+                      const sh = totalHeight;
+                      const topRoundedPath =
+                        `M${sx},${sy + r} ` +
+                        `Q${sx},${sy} ${sx + r},${sy} ` +
+                        `L${sx + sw - r},${sy} ` +
+                        `Q${sx + sw},${sy} ${sx + sw},${sy + r} ` +
+                        `L${sx + sw},${sy + sh} ` +
+                        `L${sx},${sy + sh} Z`;
+
+                      return (
+                        <g>
+                          <defs>
+                            <clipPath id={clipId}>
+                              <path d={topRoundedPath} />
+                            </clipPath>
+                          </defs>
+                          <rect
+                            x={p.x}
+                            y={p.y - yOffset}
+                            width={p.width}
+                            height={p.height}
+                            fill={p.fill}
+                            clipPath={`url(#${clipId})`}
+                          />
+                        </g>
+                      );
+                    }}
+                  />
+                );
+              })}
+            </BarChart>
+          </ResponsiveContainer>
+          </div>
         </div>
       )}
 
@@ -124,7 +433,7 @@ export function Machines() {
           return (
             <div
               key={m.machine_id}
-              className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 space-y-3"
+              className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 pt-3 pb-4 space-y-3"
             >
               <div className="flex items-center justify-between">
                 <h3 className="font-medium text-sm">{m.machine_name}</h3>
@@ -163,7 +472,7 @@ export function Machines() {
                 <div>
                   <p className="text-slate-500">Last Activity</p>
                   <p className="font-mono font-medium text-[10px]">
-                    {lastSyncAt ? lastSyncAt.slice(0, 19).replace("T", " ") : m.last_activity || "never"}
+                    {lastSyncAt ? formatKstTimestamp(lastSyncAt, { withSeconds: true }) : m.last_activity || "never"}
                   </p>
                 </div>
               </div>

@@ -65,7 +65,7 @@ export function MonthlyCostChart({ data }: MonthlyCostChartProps) {
             tickFormatter={(v: number) => `$${v}`}
             axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
           />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(148,163,184,0.08)" }} />
           <Bar dataKey="cost" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>

@@ -24,7 +24,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     .filter(Boolean);
 
 
-  if (allowedEmails.length > 0 && !allowedEmails.includes(email)) {
+  const allowAll = allowedEmails.includes("*");
+  if (!allowAll && allowedEmails.length > 0 && !allowedEmails.includes(email)) {
     return new Response(
       JSON.stringify({ error: "Unauthorized email" }),
       { status: 403, headers: { "Content-Type": "application/json" } },

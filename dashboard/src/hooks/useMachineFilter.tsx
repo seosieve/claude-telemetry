@@ -2,9 +2,9 @@ import {
   createContext,
   useContext,
   useState,
-  useEffect,
   type ReactNode,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { fetchMachines } from "../lib/api";
 
 interface Machine {
@@ -35,15 +35,11 @@ export function MachineFilterProvider({ children }: { children: ReactNode }) {
     const params = new URLSearchParams(window.location.search);
     return params.get("machine") || undefined;
   });
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchMachines()
-      .then((data) => setMachines(data as Machine[]))
-      .catch((e) => { console.warn("Machine list unavailable:", e.message); })
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, isLoading } = useQuery<Machine[]>({
+    queryKey: ["machines", { active_only: true }],
+    queryFn: () => fetchMachines() as Promise<Machine[]>,
+  });
 
   const setMachineId = (id: string | undefined) => {
     setMachineIdState(id);
@@ -61,7 +57,12 @@ export function MachineFilterProvider({ children }: { children: ReactNode }) {
 
   return (
     <MachineFilterContext.Provider
-      value={{ machineId, setMachineId, machines, loading }}
+      value={{
+        machineId,
+        setMachineId,
+        machines: data ?? [],
+        loading: isLoading,
+      }}
     >
       {children}
     </MachineFilterContext.Provider>

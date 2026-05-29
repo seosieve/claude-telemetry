@@ -57,7 +57,7 @@ function getCommands(
       label: "Run setup wizard",
       code: setupCmd,
       warning:
-        "Paste the service key from the previous step. The wizard configures hooks, MCP server, statusline, and daemon automatically.",
+        "Replace PASTE_YOUR_KEY_HERE with your Supabase service_role key (see the note above). The wizard configures hooks, MCP server, statusline, and daemon automatically.",
     },
     {
       step: "3",
@@ -86,73 +86,22 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function OneTimeKeyModal({
-  serviceKey,
-  onClose,
-}: {
-  serviceKey: string;
-  onClose: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [onClose]);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(serviceKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
+// Where the agent's service_role key comes from. We deliberately do NOT return
+// the key from /api/generate-agent-config (it's unauthenticated under guest
+// mode), so the user copies it once from the Supabase dashboard instead.
+function ServiceKeyNotice() {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70" />
-      <div className="relative z-10 w-full max-w-lg rounded-xl border border-amber-500/20 bg-slate-900 p-6 shadow-2xl">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-lg">{"\uD83D\uDD10"}</span>
-          <h3 className="text-sm font-semibold text-amber-400">
-            Service Key — One-Time View
-          </h3>
-        </div>
-
-        <p className="text-xs text-slate-400 mb-4">
-          This key will only be shown <span className="font-semibold text-white">once</span>.
-          Copy it now and paste it in Step 2 of the setup commands.
-        </p>
-
-        <div className="relative rounded-lg bg-slate-950 border border-white/[0.06] p-4">
-          <code className="block break-all font-mono text-xs text-amber-300 select-all">
-            {serviceKey}
-          </code>
-          <button
-            onClick={handleCopy}
-            className="absolute top-2 right-2 rounded-md bg-amber-500/20 px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-500/30"
-          >
-            {copied ? "Copied!" : "Copy Key"}
-          </button>
-        </div>
-
-        <div className="mt-4 rounded-lg border border-rose-500/20 bg-rose-500/5 p-3">
-          <p className="text-[11px] text-rose-400">
-            {"\u26A0\uFE0F"} After closing this dialog, the key cannot be retrieved.
-            If you lose it, go to Supabase Dashboard {"\u2192"} Settings {"\u2192"} API {"\u2192"} service_role.
-          </p>
-        </div>
-
-        <div className="mt-5 flex justify-end">
-          <button
-            onClick={onClose}
-            className="rounded-lg bg-white/[0.06] px-4 py-2 text-xs font-medium text-slate-300 transition-colors hover:bg-white/[0.1]"
-          >
-            I've copied the key — close
-          </button>
-        </div>
-      </div>
+    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+      <p className="text-xs text-amber-400">
+        {"🔐"}{" "}
+        <span className="font-semibold">service_role key</span> is not shown
+        here for security. Copy it once from{" "}
+        <span className="font-mono text-amber-300">
+          Supabase {"→"} Settings {"→"} API {"→"} service_role
+        </span>{" "}
+        and paste it into Step 2 in place of{" "}
+        <span className="font-mono">PASTE_YOUR_KEY_HERE</span>.
+      </p>
     </div>
   );
 }
@@ -163,8 +112,6 @@ export function Deploy() {
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [oneTimeKey, setOneTimeKey] = useState<string | null>(null);
 
   // Auto-suggest machine name when OS changes or on mount
   useEffect(() => {
@@ -185,20 +132,11 @@ export function Deploy() {
     try {
       const cfg = await generateAgentConfig(machineName.trim(), os);
       setConfig(cfg);
-      // Show the service key in a one-time modal
-      setOneTimeKey(cfg.service_key);
-      setShowKeyModal(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate config");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleCloseKeyModal = () => {
-    setShowKeyModal(false);
-    // Clear the key from memory — never shown again
-    setOneTimeKey(null);
   };
 
   const commands = config ? getCommands(os, config, machineName) : [];
@@ -271,6 +209,8 @@ export function Deploy() {
             </p>
           </div>
 
+          <ServiceKeyNotice />
+
           {commands.map((cmd) => (
             <div
               key={cmd.step}
@@ -278,7 +218,7 @@ export function Deploy() {
             >
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-sm font-medium">
-                  <span className="text-sky-400">Step {cmd.step}</span> — {cmd.label}
+                  <span className="text-sky-400">Step {cmd.step}</span> {"—"} {cmd.label}
                 </h3>
                 <CopyButton text={cmd.code} />
               </div>
@@ -287,20 +227,12 @@ export function Deploy() {
               </pre>
               {cmd.warning && (
                 <p className="mt-2 text-xs text-amber-400">
-                  {"\u26A0\uFE0F"} {cmd.warning}
+                  {"⚠️"} {cmd.warning}
                 </p>
               )}
             </div>
           ))}
         </div>
-      )}
-
-      {/* One-time key modal */}
-      {showKeyModal && oneTimeKey && (
-        <OneTimeKeyModal
-          serviceKey={oneTimeKey}
-          onClose={handleCloseKeyModal}
-        />
       )}
     </div>
   );

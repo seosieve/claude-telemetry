@@ -153,6 +153,7 @@ export function Projects() {
                   fontSize: 12,
                   color: "white",
                 }}
+                cursor={{ fill: "rgba(148,163,184,0.08)" }}
               />
               <Bar dataKey="total_cost" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
             </BarChart>
@@ -240,7 +241,7 @@ export function Projects() {
                         const budget = prefs.project_budgets?.[p.project];
                         if (!budget) return <span className="text-slate-600">—</span>;
                         const budgetPct = (p.total_cost / budget) * 100;
-                        const color = budgetPct > 90 ? "bg-rose-500" : budgetPct > 70 ? "bg-amber-500" : "bg-emerald-500";
+                        const color = budgetPct > 90 ? "bg-fuchsia-500" : budgetPct > 70 ? "bg-amber-500" : "bg-violet-500";
                         return (
                           <div>
                             <div className="h-2 rounded-full bg-white/[0.04]">

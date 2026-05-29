@@ -1,9 +1,6 @@
-interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_KEY: string;
-}
+import { fetchAllRows, serviceHeaders, type SupabaseEnv } from "./_lib";
 
-export const onRequestGet: PagesFunction<Env> = async (context) => {
+export const onRequestGet: PagesFunction<SupabaseEnv> = async (context) => {
   const url = new URL(context.request.url);
   const start_date = url.searchParams.get("start_date");
   const end_date = url.searchParams.get("end_date");
@@ -20,19 +17,15 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   const query = filters.length > 0 ? `?${filters.join("&")}&order=date.desc` : "?order=date.desc";
 
-  const response = await fetch(
+  // Page through ALL matching rows. Charts depend on the full range; a plain
+  // fetch caps at 1000 and the missing older days would silently render as 0.
+  const data = await fetchAllRows(
     `${context.env.SUPABASE_URL}/rest/v1/daily_usage${query}`,
-    {
-      headers: {
-        apikey: context.env.SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`,
-      },
-    },
+    serviceHeaders(context.env),
   );
 
-  const data = await response.json();
   return new Response(JSON.stringify(data), {
-    status: response.status,
+    status: 200,
     headers: { "Content-Type": "application/json" },
   });
 };

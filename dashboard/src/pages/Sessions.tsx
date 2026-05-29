@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { fetchSessions, type PaginatedSessions, type SessionRow } from "../lib/api";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { fetchSessions, type PaginatedSessions } from "../lib/api";
 import { useMachineFilter } from "../hooks/useMachineFilter";
-import { formatTokens } from "../lib/dateUtils";
+import { formatTokens, formatKstDate } from "../lib/dateUtils";
 import { EmptyState } from "../components/EmptyState";
 import { EmptyChat } from "../components/illustrations/EmptyChat";
 
@@ -21,19 +22,13 @@ function ModelBadge({ model }: { model: string }) {
 
 export function Sessions() {
   const { machineId, setMachineId, machines } = useMachineFilter();
-  const [data, setData] = useState<SessionRow[]>([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage] = useState(20);
   const [sort, setSort] = useState("cost_usd");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [projectFilter, setProjectFilter] = useState("");
   const [subagentFilter, setSubagentFilter] = useState<string | undefined>();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const requestVersion = useRef(0);
 
-  // Machine name lookup map
   const machineNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const m of machines) {
@@ -42,7 +37,6 @@ export function Sessions() {
     return map;
   }, [machines]);
 
-  // Reset page when filters change
   const prevMachineId = useRef(machineId);
   useEffect(() => {
     if (prevMachineId.current !== machineId) {
@@ -51,32 +45,24 @@ export function Sessions() {
     }
   }, [machineId]);
 
-  useEffect(() => {
-    const version = ++requestVersion.current;
-    setLoading(true);
-    setError(null);
-    fetchSessions({
-      machineId,
-      project: projectFilter || undefined,
-      isSubagent: subagentFilter,
-      page,
-      perPage,
-      sort,
-      order,
-    })
-      .then((result: PaginatedSessions) => {
-        if (version !== requestVersion.current) return;
-        setData(result.data);
-        setTotal(result.total);
-      })
-      .catch((err) => {
-        if (version !== requestVersion.current) return;
-        setError(err.message);
-      })
-      .finally(() => {
-        if (version === requestVersion.current) setLoading(false);
-      });
-  }, [machineId, page, perPage, sort, order, projectFilter, subagentFilter]);
+  const sessionsQ = useQuery<PaginatedSessions>({
+    queryKey: ["sessions", { machineId, projectFilter, subagentFilter, page, perPage, sort, order }],
+    queryFn: () =>
+      fetchSessions({
+        machineId,
+        project: projectFilter || undefined,
+        isSubagent: subagentFilter,
+        page,
+        perPage,
+        sort,
+        order,
+      }) as Promise<PaginatedSessions>,
+    placeholderData: keepPreviousData,
+  });
+  const data = sessionsQ.data?.data ?? [];
+  const total = sessionsQ.data?.total ?? 0;
+  const loading = sessionsQ.isLoading;
+  const error = sessionsQ.error?.message ?? null;
 
   const totalPages = Math.ceil(total / perPage);
 
@@ -235,7 +221,7 @@ export function Sessions() {
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-slate-500">
-                    {s.last_activity_at?.slice(0, 10) || "\u2014"}
+                    {formatKstDate(s.last_activity_at)}
                   </td>
                 </tr>
               ))}

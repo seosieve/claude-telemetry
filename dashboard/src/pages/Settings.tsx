@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchMachines, deleteMachine, downloadExport, fetchProjectCosts, testWebhook } from "../lib/api";
 import type { NotificationPrefs } from "../lib/api";
 import { getStatusDisplay } from "../lib/machineStatus";
 import { usePreferences } from "../hooks/usePreferences";
-import { daysAgo, today } from "../lib/dateUtils";
+import { daysAgo, today, formatKstTimestamp } from "../lib/dateUtils";
 import { ConfirmDeleteModal } from "../components/ConfirmDeleteModal";
 
 interface Machine {
@@ -121,51 +122,42 @@ function NotificationsSection({ prefs, save }: { prefs: { notifications?: Notifi
 
 export function Settings() {
   const { prefs, save } = usePreferences();
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [dailyThreshold, setDailyThreshold] = useState("");
   const [weeklyThreshold, setWeeklyThreshold] = useState("");
 
-  // Sync local state from preferences
   useEffect(() => {
     setDailyThreshold(String(prefs.alert_thresholds?.daily || 20));
     setWeeklyThreshold(String(prefs.alert_thresholds?.weekly || 100));
   }, [prefs.alert_thresholds]);
 
-  const loadMachines = useCallback(() => {
-    setLoading(true);
-    fetchMachines(false)
-      .then((data) => setMachines(data as Machine[]))
-      .catch((e) => { console.warn("Settings fetch failed:", e.message); })
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    loadMachines();
-  }, [loadMachines]);
+  const machinesQ = useQuery<Machine[]>({
+    queryKey: ["machines", { active_only: false }],
+    queryFn: () => fetchMachines(false) as Promise<Machine[]>,
+  });
+  const machines = machinesQ.data ?? [];
+  const loading = machinesQ.isLoading;
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
     try {
       await deleteMachine(deleteTarget.id);
       setDeleteTarget(null);
-      loadMachines();
+      queryClient.invalidateQueries({ queryKey: ["machines"] });
     } catch {
       // Error handled by api.ts
     }
-  }, [deleteTarget, loadMachines]);
+  }, [deleteTarget, queryClient]);
 
-  const [allowedEmails, setAllowedEmails] = useState<string[]>([]);
-
-  useEffect(() => {
-    fetch("/api/config", {
-      headers: { Authorization: `Bearer ${localStorage.getItem("claude_tracker_token") || ""}` },
-    })
-      .then((r) => r.json())
-      .then((data: { allowed_emails: string[] }) => setAllowedEmails(data.allowed_emails))
-      .catch((e) => { console.warn("Settings fetch failed:", e.message); });
-  }, []);
+  const configQ = useQuery<{ allowed_emails: string[] }>({
+    queryKey: ["config"],
+    queryFn: () =>
+      fetch("/api/config", {
+        headers: { Authorization: `Bearer ${localStorage.getItem("claude_tracker_token") || ""}` },
+      }).then((r) => r.json()),
+  });
+  const allowedEmails = configQ.data?.allowed_emails ?? [];
 
   const saveThresholds = () => {
     save({
@@ -176,19 +168,19 @@ export function Settings() {
     });
   };
 
-  // Project budgets
-  const [projectNames, setProjectNames] = useState<string[]>([]);
   const [budgets, setBudgets] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    const dateRange = { start: daysAgo(90), end: today() };
-    fetchProjectCosts(dateRange.start, dateRange.end)
-      .then((data) => {
-        const arr = data as Array<{ project: string }>;
-        setProjectNames(arr.map((p) => p.project));
-      })
-      .catch((e) => { console.warn("Settings fetch failed:", e.message); });
-  }, []);
+  const projectsQ = useQuery({
+    queryKey: ["project-costs-90d"],
+    queryFn: () => {
+      const dateRange = { start: daysAgo(90), end: today() };
+      return fetchProjectCosts(dateRange.start, dateRange.end) as Promise<Array<{ project: string }>>;
+    },
+  });
+  const projectNames = useMemo(
+    () => (projectsQ.data ?? []).map((p) => p.project),
+    [projectsQ.data],
+  );
 
   // Sync budgets from preferences
   useEffect(() => {
@@ -246,7 +238,7 @@ export function Settings() {
                         {m.hostname || "—"}
                       </td>
                       <td className="py-2 font-mono text-slate-400">
-                        {m.last_sync_at?.slice(0, 16).replace("T", " ") || "never"}
+                        {formatKstTimestamp(m.last_sync_at)}
                       </td>
                       <td className="py-2">
                         <div className="flex items-center gap-1.5">
@@ -382,7 +374,7 @@ export function Settings() {
         {projectNames.length > 0 ? (
           <>
             <div className="space-y-2">
-              {projectNames.map((name) => (
+              {projectNames.map((name: string) => (
                 <div key={name} className="flex items-center gap-3">
                   <span className="flex-1 text-xs truncate">{name}</span>
                   <div className="flex items-center gap-1">

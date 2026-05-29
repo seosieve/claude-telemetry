@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useUsageData } from "../hooks/useUsageData";
 import { useAlertThresholds } from "../hooks/useAlertThresholds";
 import { usePreferences } from "../hooks/usePreferences";
@@ -229,6 +230,7 @@ function AnomaliesTable({ trends }: { trends: TrendsData }) {
   return (
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
       <h3 className="mb-3 text-sm font-medium">Anomalies Detected</h3>
+      <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-white/[0.06] text-slate-500">
@@ -254,6 +256,7 @@ function AnomaliesTable({ trends }: { trends: TrendsData }) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -295,36 +298,30 @@ export function Insights() {
   const { prefs } = usePreferences();
   const { machineId } = useMachineFilter();
 
-  const [rateLimits, setRateLimits] = useState<{ window_5h_percent?: number; window_1w_percent?: number } | null>(null);
-  const [trends, setTrends] = useState<TrendsData | null>(null);
-  const [comparison, setComparison] = useState<ComparePeriodsData | null>(null);
   const [trendDays, setTrendDays] = useState(30);
 
-  useEffect(() => {
-    fetchRateLimits(machineId, "1")
-      .then((data) => {
-        const arr = data as Array<Record<string, unknown>>;
-        if (arr.length > 0) {
-          setRateLimits({
-            window_5h_percent: arr[0].window_5h_percent as number | undefined,
-            window_1w_percent: arr[0].window_1w_percent as number | undefined,
-          });
-        }
-      })
-      .catch((e) => { console.warn("Rate limits unavailable:", e.message); });
-  }, [machineId]);
+  const { data: rateLimitsArr } = useQuery({
+    queryKey: ["rate-limits", machineId, "1"],
+    queryFn: () => fetchRateLimits(machineId, "1") as Promise<Array<Record<string, unknown>>>,
+  });
+  const rateLimits = useMemo(() => {
+    const arr = rateLimitsArr;
+    if (!arr || arr.length === 0) return null;
+    return {
+      window_5h_percent: arr[0].window_5h_percent as number | undefined,
+      window_1w_percent: arr[0].window_1w_percent as number | undefined,
+    };
+  }, [rateLimitsArr]);
 
-  useEffect(() => {
-    fetchTrends(trendDays, machineId)
-      .then(setTrends)
-      .catch((e) => { console.warn("Trends unavailable:", e.message); });
-  }, [trendDays, machineId]);
+  const { data: trends = null } = useQuery<TrendsData | null>({
+    queryKey: ["trends", trendDays, machineId],
+    queryFn: () => fetchTrends(trendDays, machineId) as Promise<TrendsData>,
+  });
 
-  useEffect(() => {
-    fetchComparePeriods("last_week", "this_week", machineId)
-      .then(setComparison)
-      .catch((e) => { console.warn("Comparison unavailable:", e.message); });
-  }, [machineId]);
+  const { data: comparison = null } = useQuery<ComparePeriodsData | null>({
+    queryKey: ["compare-periods", "last_week", "this_week", machineId],
+    queryFn: () => fetchComparePeriods("last_week", "this_week", machineId) as Promise<ComparePeriodsData>,
+  });
 
   // Build insight cards (existing logic)
   const insights: InsightCardProps[] = [];
@@ -452,7 +449,7 @@ export function Insights() {
                 <span className="w-20 text-xs font-mono text-slate-500">{w.week_start.slice(5)}</span>
                 <div className="flex-1 h-3 rounded-full bg-white/[0.04]">
                   <div
-                    className={`h-3 rounded-full ${w.week_cost > 150 ? "bg-rose-500" : w.week_cost > 100 ? "bg-amber-500" : "bg-sky-500"}`}
+                    className={`h-3 rounded-full ${w.week_cost > 150 ? "bg-fuchsia-500" : w.week_cost > 100 ? "bg-amber-500" : "bg-violet-500"}`}
                     style={{ width: `${Math.min(100, (w.week_cost / 200) * 100)}%` }}
                   />
                 </div>

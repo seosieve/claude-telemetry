@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   getUsageSummary,
   getProjectCosts,
@@ -25,42 +25,55 @@ interface UsageData {
   error: string | null;
 }
 
-export function useUsageData(dateRange: DateRange): UsageData {
+export function useUsageData(
+  dateRange: DateRange,
+  opts?: { polling?: boolean },
+): UsageData {
   const { machineId } = useMachineFilter();
-  const [summary, setSummary] = useState<UsageSummaryRow[]>([]);
-  const [projects, setProjects] = useState<ProjectCostRow[]>([]);
-  const [weeklyRates, setWeeklyRates] = useState<WeeklyRateRow[]>([]);
-  const [machines, setMachines] = useState<MachineSummaryRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const requestVersion = useRef(0);
+  const { start, end } = dateRange;
+  const refetchInterval = opts?.polling ? 30_000 : undefined;
 
-  useEffect(() => {
-    const version = ++requestVersion.current;
-    setLoading(true);
-    setError(null);
+  const summaryQ = useQuery<UsageSummaryRow[]>({
+    queryKey: ["usage-summary", start, end, machineId],
+    queryFn: () => getUsageSummary(start, end, machineId),
+    refetchInterval,
+  });
 
-    Promise.all([
-      getUsageSummary(dateRange.start, dateRange.end, machineId),
-      getProjectCosts(dateRange.start, dateRange.end, machineId),
-      getWeeklyRateEstimate(machineId),
-      getMachineSummary(dateRange.start, dateRange.end),
-    ])
-      .then(([s, p, w, m]) => {
-        if (version !== requestVersion.current) return;
-        setSummary(s);
-        setProjects(p);
-        setWeeklyRates(w);
-        setMachines(m);
-      })
-      .catch((err) => {
-        if (version !== requestVersion.current) return;
-        setError(err.message);
-      })
-      .finally(() => {
-        if (version === requestVersion.current) setLoading(false);
-      });
-  }, [dateRange.start, dateRange.end, machineId]);
+  const projectsQ = useQuery<ProjectCostRow[]>({
+    queryKey: ["project-costs", start, end, machineId],
+    queryFn: () => getProjectCosts(start, end, machineId),
+    refetchInterval,
+  });
 
-  return { summary, projects, weeklyRates, machines, loading, error };
+  const weeklyQ = useQuery<WeeklyRateRow[]>({
+    queryKey: ["weekly-rate", machineId],
+    queryFn: () => getWeeklyRateEstimate(machineId),
+    refetchInterval,
+  });
+
+  const machinesQ = useQuery<MachineSummaryRow[]>({
+    queryKey: ["machine-summary", start, end],
+    queryFn: () => getMachineSummary(start, end),
+    refetchInterval,
+  });
+
+  const error =
+    summaryQ.error?.message ||
+    projectsQ.error?.message ||
+    weeklyQ.error?.message ||
+    machinesQ.error?.message ||
+    null;
+
+  return {
+    summary: summaryQ.data ?? [],
+    projects: projectsQ.data ?? [],
+    weeklyRates: weeklyQ.data ?? [],
+    machines: machinesQ.data ?? [],
+    loading:
+      summaryQ.isLoading ||
+      projectsQ.isLoading ||
+      weeklyQ.isLoading ||
+      machinesQ.isLoading,
+    error,
+  };
 }

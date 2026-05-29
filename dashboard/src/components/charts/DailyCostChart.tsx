@@ -9,6 +9,7 @@ import {
   Legend,
 } from "recharts";
 import type { UsageSummaryRow } from "../../lib/queries";
+import { MODEL_COLORS } from "../../lib/colors";
 
 interface DailyCostChartProps {
   data: UsageSummaryRow[];
@@ -25,10 +26,18 @@ function CustomTooltip({
 }) {
   if (!active || !payload?.length) return null;
   const total = payload.reduce((s, p) => s + p.value, 0);
+  if (total === 0) {
+    return (
+      <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
+        <p className="mb-1 text-xs text-slate-300">{label}</p>
+        <p className="text-xs text-slate-500">사용 기록 없음</p>
+      </div>
+    );
+  }
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
       <p className="mb-1 text-xs text-slate-300">{label}</p>
-      {payload.map((p) => (
+      {payload.filter((p) => p.value > 0).map((p) => (
         <div key={p.name} className="flex items-center gap-2 text-xs">
           <span
             className="inline-block h-2 w-2 rounded-full"
@@ -65,7 +74,7 @@ export function DailyCostChart({ data }: DailyCostChartProps) {
             tickFormatter={(v: number) => `$${v}`}
             axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
           />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(148,163,184,0.08)" }} />
           <Legend
             wrapperStyle={{ fontSize: 11, paddingTop: 8, color: "#cbd5e1" }}
             iconType="circle"
@@ -75,21 +84,21 @@ export function DailyCostChart({ data }: DailyCostChartProps) {
             dataKey="opus_cost"
             name="Opus"
             stackId="cost"
-            fill="#f43f5e"
+            fill={MODEL_COLORS.Opus}
             radius={[0, 0, 0, 0]}
           />
           <Bar
             dataKey="sonnet_cost"
             name="Sonnet"
             stackId="cost"
-            fill="#38bdf8"
+            fill={MODEL_COLORS.Sonnet}
             radius={[0, 0, 0, 0]}
           />
           <Bar
             dataKey="haiku_cost"
             name="Haiku"
             stackId="cost"
-            fill="#34d399"
+            fill={MODEL_COLORS.Haiku}
             radius={[2, 2, 0, 0]}
           />
         </BarChart>

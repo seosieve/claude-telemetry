@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchPreferences,
   updatePreferences,
@@ -36,70 +37,73 @@ export const PreferencesContext = createContext<PreferencesContextValue>({
   save: async () => {},
 });
 
-export function usePreferencesProvider() {
-  const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_PREFS);
-  const [loading, setLoading] = useState(true);
+const PREFS_KEY = ["preferences"];
 
-  // Load only when authenticated (token exists)
-  useEffect(() => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
-    fetchPreferences()
-      .then((data) => {
-        setPrefs(data);
-        // Migrate localStorage thresholds if they exist
-        const localDaily = localStorage.getItem("alert_daily_threshold");
-        const localWeekly = localStorage.getItem("alert_weekly_threshold");
-        if (localDaily || localWeekly) {
-          const thresholds = {
-            daily: localDaily ? parseFloat(localDaily) : data.alert_thresholds.daily,
-            weekly: localWeekly ? parseFloat(localWeekly) : data.alert_thresholds.weekly,
-          };
-          // Only migrate if different from defaults
-          if (thresholds.daily !== data.alert_thresholds.daily || thresholds.weekly !== data.alert_thresholds.weekly) {
-            updatePreferences({ alert_thresholds: thresholds }).then((updated) => {
-              setPrefs(updated);
-            }).catch((e) => { console.warn("Preferences migration failed:", e.message); });
-          }
-          // Clear localStorage after migration
+async function loadPreferences(): Promise<UserPreferences> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return DEFAULT_PREFS;
+  try {
+    const data = await fetchPreferences();
+    const localDaily = localStorage.getItem("alert_daily_threshold");
+    const localWeekly = localStorage.getItem("alert_weekly_threshold");
+    if (localDaily || localWeekly) {
+      const thresholds = {
+        daily: localDaily ? parseFloat(localDaily) : data.alert_thresholds.daily,
+        weekly: localWeekly ? parseFloat(localWeekly) : data.alert_thresholds.weekly,
+      };
+      if (
+        thresholds.daily !== data.alert_thresholds.daily ||
+        thresholds.weekly !== data.alert_thresholds.weekly
+      ) {
+        try {
+          const updated = await updatePreferences({ alert_thresholds: thresholds });
           localStorage.removeItem("alert_daily_threshold");
           localStorage.removeItem("alert_weekly_threshold");
+          return updated;
+        } catch (e) {
+          console.warn("Preferences migration failed:", (e as Error).message);
         }
-      })
-      .catch(() => {
-        // Fallback to localStorage
-        const stored = localStorage.getItem(FALLBACK_KEY);
-        if (stored) {
-          try {
-            setPrefs({ ...DEFAULT_PREFS, ...JSON.parse(stored) });
-          } catch {
-            // ignore
-          }
-        }
-      })
-      .finally(() => setLoading(false));
-  }, []);
+      }
+      localStorage.removeItem("alert_daily_threshold");
+      localStorage.removeItem("alert_weekly_threshold");
+    }
+    return data;
+  } catch {
+    const stored = localStorage.getItem(FALLBACK_KEY);
+    if (stored) {
+      try {
+        return { ...DEFAULT_PREFS, ...JSON.parse(stored) };
+      } catch {
+        // ignore
+      }
+    }
+    return DEFAULT_PREFS;
+  }
+}
+
+export function usePreferencesProvider() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery<UserPreferences>({
+    queryKey: PREFS_KEY,
+    queryFn: loadPreferences,
+  });
+  const prefs = data ?? DEFAULT_PREFS;
 
   const save = useCallback(
     async (data: Partial<Omit<UserPreferences, "user_id" | "updated_at">>) => {
       try {
         const updated = await updatePreferences(data);
-        setPrefs(updated);
+        queryClient.setQueryData(PREFS_KEY, updated);
       } catch {
-        // Offline fallback: save locally
         const merged = { ...prefs, ...data };
-        setPrefs(merged);
+        queryClient.setQueryData(PREFS_KEY, merged);
         localStorage.setItem(FALLBACK_KEY, JSON.stringify(merged));
       }
     },
-    [prefs],
+    [prefs, queryClient],
   );
 
-  return { prefs, loading, save };
+  return { prefs, loading: isLoading, save };
 }
 
 export function usePreferences() {

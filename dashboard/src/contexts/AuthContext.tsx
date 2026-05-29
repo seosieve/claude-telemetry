@@ -33,12 +33,15 @@ const AuthContext = createContext<AuthContextValue>({
 import { TOKEN_KEY, REFRESH_KEY } from "../lib/constants";
 import { setOnAuthExpired } from "../lib/api";
 
+const GUEST_USER: User = {
+  id: "00000000-0000-0000-0000-000000000000",
+  email: "guest@local",
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(() =>
-    localStorage.getItem(TOKEN_KEY),
-  );
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(GUEST_USER);
+  const [token, setToken] = useState<string | null>("guest");
+  const [isLoading, setIsLoading] = useState(false);
 
   // Validate token on mount and after callback
   const validateToken = useCallback(async (t: string) => {
@@ -64,39 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return false;
   }, []);
 
-  // Check for auth callback tokens in URL hash
+  // Guest mode — no auth required, always authenticated
   useEffect(() => {
-    const hash = window.location.hash;
-
-    if (hash.includes("auth-callback") || hash.includes("access_token")) {
-      // Parse tokens from hash: could be #auth-callback?access_token=... or #access_token=...
-      const paramString = hash.includes("?")
-        ? hash.split("?")[1]
-        : hash.slice(1);
-      const params = new URLSearchParams(paramString);
-      const accessToken = params.get("access_token");
-      const refreshToken = params.get("refresh_token");
-
-      if (accessToken) {
-        // Clean URL FIRST to prevent reprocessing on reload
-        window.history.replaceState({}, "", window.location.pathname);
-        if (refreshToken) {
-          localStorage.setItem(REFRESH_KEY, refreshToken);
-        }
-        validateToken(accessToken).finally(() => {
-          setIsLoading(false);
-        });
-        return;
-      }
-    }
-
-    // Try existing token
-    const savedToken = localStorage.getItem(TOKEN_KEY);
-    if (savedToken) {
-      validateToken(savedToken).finally(() => setIsLoading(false));
-    } else {
-      setIsLoading(false);
-    }
+    setIsLoading(false);
   }, [validateToken]);
 
   const login = useCallback(

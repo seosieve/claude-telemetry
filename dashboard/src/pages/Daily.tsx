@@ -1,12 +1,14 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useUsageData } from "../hooks/useUsageData";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { fetchStatsExtra } from "../lib/api";
-import { rangeToDate, groupByWeek } from "../lib/dateUtils";
+import { rangeToDate, groupByWeek, fillDateGaps } from "../lib/dateUtils";
 import { EmptyState } from "../components/EmptyState";
 import { EmptyChart } from "../components/illustrations/EmptyChart";
 import { usePreferences } from "../hooks/usePreferences";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
+import { MODEL_COLORS } from "../lib/colors";
 import {
   AreaChart,
   Area,
@@ -28,6 +30,20 @@ export function Daily() {
   const { machineId } = useMachineFilter();
   const { prefs } = usePreferences();
 
+  const filledSummary = useMemo(
+    () =>
+      fillDateGaps(summary, dateRange.start, dateRange.end, (date) => ({
+        date,
+        total_cost: 0,
+        total_tokens: 0,
+        opus_cost: 0,
+        sonnet_cost: 0,
+        haiku_cost: 0,
+        machine_count: 0,
+      })),
+    [summary, dateRange],
+  );
+
   const weeklyData = useMemo(
     () => groupByWeek(summary, prefs.week_start_day),
     [summary, prefs.week_start_day],
@@ -45,23 +61,16 @@ export function Daily() {
     return null;
   }, [weeklyData]);
 
-  const [hourCounts, setHourCounts] = useState<Record<string, number> | null>(null);
-
-  const [statsError, setStatsError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setStatsError(null);
-    fetchStatsExtra(machineId)
-      .then((data) => {
-        const arr = data as Array<{ hour_counts?: Record<string, number> }>;
-        if (arr.length > 0 && arr[0].hour_counts) {
-          setHourCounts(arr[0].hour_counts);
-        }
-      })
-      .catch((err) => {
-        setStatsError(err.message);
-      });
-  }, [machineId]);
+  const statsQ = useQuery({
+    queryKey: ["stats-extra", machineId],
+    queryFn: () => fetchStatsExtra(machineId) as Promise<Array<{ hour_counts?: Record<string, number> }>>,
+  });
+  const hourCounts = useMemo<Record<string, number> | null>(() => {
+    const arr = statsQ.data;
+    if (arr && arr.length > 0 && arr[0].hour_counts) return arr[0].hour_counts;
+    return null;
+  }, [statsQ.data]);
+  const statsError = statsQ.error?.message ?? null;
 
   // Top 10 most expensive days
   const top10 = [...summary]
@@ -132,7 +141,7 @@ export function Daily() {
         </h3>
         {view === "daily" ? (
           <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={summary} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+            <AreaChart data={filledSummary} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#94a3b8" }} tickFormatter={(v: string) => v.slice(5)} />
               <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} tickFormatter={(v: number) => `$${v}`} />
@@ -141,9 +150,9 @@ export function Daily() {
                 formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />
-              <Area type="monotone" dataKey="opus_cost" name="Opus" stackId="1" stroke="#f43f5e" fill="#f43f5e" fillOpacity={0.4} />
-              <Area type="monotone" dataKey="sonnet_cost" name="Sonnet" stackId="1" stroke="#38bdf8" fill="#38bdf8" fillOpacity={0.4} />
-              <Area type="monotone" dataKey="haiku_cost" name="Haiku" stackId="1" stroke="#34d399" fill="#34d399" fillOpacity={0.4} />
+              <Area type="monotone" dataKey="opus_cost" name="Opus" stackId="1" stroke={MODEL_COLORS.Opus} fill={MODEL_COLORS.Opus} fillOpacity={0.4} />
+              <Area type="monotone" dataKey="sonnet_cost" name="Sonnet" stackId="1" stroke={MODEL_COLORS.Sonnet} fill={MODEL_COLORS.Sonnet} fillOpacity={0.4} />
+              <Area type="monotone" dataKey="haiku_cost" name="Haiku" stackId="1" stroke={MODEL_COLORS.Haiku} fill={MODEL_COLORS.Haiku} fillOpacity={0.4} />
             </AreaChart>
           </ResponsiveContainer>
         ) : (
@@ -156,11 +165,12 @@ export function Daily() {
                 contentStyle={{ backgroundColor: "#0f172a", border: "1px solid rgb(51,65,85)", borderRadius: 8, fontSize: 12, color: "white" }}
                 formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
                 labelStyle={{ color: "#cbd5e1" }}
+                cursor={{ fill: "rgba(148,163,184,0.08)" }}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />
-              <Bar dataKey="opusCost" name="Opus" stackId="1" fill="#f43f5e" />
-              <Bar dataKey="sonnetCost" name="Sonnet" stackId="1" fill="#38bdf8" />
-              <Bar dataKey="haikuCost" name="Haiku" stackId="1" fill="#34d399" radius={[2, 2, 0, 0]} />
+              <Bar dataKey="opusCost" name="Opus" stackId="1" fill={MODEL_COLORS.Opus} />
+              <Bar dataKey="sonnetCost" name="Sonnet" stackId="1" fill={MODEL_COLORS.Sonnet} />
+              <Bar dataKey="haikuCost" name="Haiku" stackId="1" fill={MODEL_COLORS.Haiku} radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         )}
@@ -170,6 +180,7 @@ export function Daily() {
         {/* Top 10 days */}
         <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
           <h3 className="mb-3 text-sm font-medium">Top 10 Most Expensive Days</h3>
+          <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-white/[0.06] text-slate-500">
@@ -197,6 +208,7 @@ export function Daily() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Hour heatmap */}

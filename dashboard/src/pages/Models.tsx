@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useUsageData } from "../hooks/useUsageData";
 import { rangeToDate } from "../lib/dateUtils";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
+import { MODEL_COLORS } from "../lib/colors";
 import {
   AreaChart,
   Area,
@@ -136,8 +137,8 @@ export function Models() {
               dataKey="opus"
               name="Opus"
               stackId="1"
-              stroke="#f43f5e"
-              fill="#f43f5e"
+              stroke={MODEL_COLORS.Opus}
+              fill={MODEL_COLORS.Opus}
               fillOpacity={0.6}
             />
             <Area
@@ -145,8 +146,8 @@ export function Models() {
               dataKey="sonnet"
               name="Sonnet"
               stackId="1"
-              stroke="#38bdf8"
-              fill="#38bdf8"
+              stroke={MODEL_COLORS.Sonnet}
+              fill={MODEL_COLORS.Sonnet}
               fillOpacity={0.6}
             />
             <Area
@@ -154,8 +155,8 @@ export function Models() {
               dataKey="haiku"
               name="Haiku"
               stackId="1"
-              stroke="#34d399"
-              fill="#34d399"
+              stroke={MODEL_COLORS.Haiku}
+              fill={MODEL_COLORS.Haiku}
               fillOpacity={0.6}
             />
           </AreaChart>

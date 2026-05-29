@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { fetchBlocks, type BlockRow } from "../lib/api";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { formatTokens, daysAgo, today } from "../lib/dateUtils";
@@ -28,7 +29,14 @@ function StatusBadge({ isActive, isGap }: { isActive: boolean; isGap: boolean })
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleString("en-GB", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleString("en-GB", {
+      timeZone: "Asia/Seoul",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
   } catch {
     return iso.slice(0, 16);
   }
@@ -41,8 +49,6 @@ function rangeToDate(r: string) {
 
 export function Blocks() {
   const { machineId, machines } = useMachineFilter();
-  const [blocks, setBlocks] = useState<BlockRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const [range, setRange] = useState("7d");
   const dateRange = useMemo(() => rangeToDate(range), [range]);
 
@@ -52,17 +58,17 @@ export function Blocks() {
     return map;
   }, [machines]);
 
-  useEffect(() => {
-    setLoading(true);
-    fetchBlocks({
-      machineId,
-      startDate: dateRange.start,
-      endDate: dateRange.end,
-    })
-      .then(setBlocks)
-      .catch((e) => { console.warn("Blocks fetch failed:", e.message); })
-      .finally(() => setLoading(false));
-  }, [machineId, dateRange.start, dateRange.end]);
+  const blocksQ = useQuery<BlockRow[]>({
+    queryKey: ["blocks", { machineId, start: dateRange.start, end: dateRange.end }],
+    queryFn: () =>
+      fetchBlocks({
+        machineId,
+        startDate: dateRange.start,
+        endDate: dateRange.end,
+      }) as Promise<BlockRow[]>,
+  });
+  const blocks = blocksQ.data ?? [];
+  const loading = blocksQ.isLoading;
 
   const activeBlocks = blocks.filter((b) => b.is_active && !b.is_gap);
   const recentBlocks = blocks.filter((b) => !b.is_gap);
@@ -155,7 +161,7 @@ export function Blocks() {
                     <div className="h-3 rounded-full bg-white/[0.06]">
                       <div
                         className={`h-3 rounded-full transition-all ${
-                          pct > 80 ? "bg-rose-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"
+                          pct > 80 ? "bg-fuchsia-500" : pct > 50 ? "bg-amber-500" : "bg-violet-500"
                         }`}
                         style={{ width: `${pct}%` }}
                       />

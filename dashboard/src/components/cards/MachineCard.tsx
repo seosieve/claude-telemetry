@@ -1,8 +1,10 @@
 import { formatTokens } from "../../lib/dateUtils";
+import { getStatusDisplay } from "../../lib/machineStatus";
 
 interface MachineCardProps {
   name: string;
   lastSync: string;
+  lastSyncAt?: string | null;
   cost: number;
   tokens: number;
   topProject: string;
@@ -12,16 +14,18 @@ interface MachineCardProps {
 export function MachineCard({
   name,
   lastSync,
+  lastSyncAt,
   cost,
   tokens,
   topProject,
   daysActive,
 }: MachineCardProps) {
+  const badge = getStatusDisplay(lastSyncAt);
   return (
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-sm">{name}</h3>
-        <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+        <span className={`inline-flex h-2 w-2 rounded-full ${badge.color}`} />
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
         <div>

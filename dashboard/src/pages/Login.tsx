@@ -31,7 +31,7 @@ export function Login() {
         {/* Logo */}
         <div className="flex flex-col items-center gap-3">
           <img src="/favicon.svg" alt="Logo" className="h-12 w-12" />
-          <h1 className="text-xl font-semibold text-white">Claude Tracker</h1>
+          <h1 className="text-xl font-semibold text-white">Rice Gang Tracker</h1>
           <p className="text-xs text-slate-500">
             Centralized token usage tracking
           </p>

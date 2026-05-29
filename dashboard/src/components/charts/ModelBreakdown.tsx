@@ -7,16 +7,11 @@ import {
   Legend,
 } from "recharts";
 import type { UsageSummaryRow } from "../../lib/queries";
+import { MODEL_COLORS as COLORS } from "../../lib/colors";
 
 interface ModelBreakdownProps {
   data: UsageSummaryRow[];
 }
-
-const COLORS: Record<string, string> = {
-  Opus: "#f43f5e",
-  Sonnet: "#38bdf8",
-  Haiku: "#34d399",
-};
 
 function CustomPieTooltip({
   active,
