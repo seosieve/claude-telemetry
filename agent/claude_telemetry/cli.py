@@ -135,16 +135,12 @@ def main() -> None:
 @click.option("--non-interactive", is_flag=True, help="Skip prompts, use flags")
 @click.option("--minimal", is_flag=True, help="Only configure base settings (no hooks/MCP/service)")
 @click.option("--name", "machine_name", default=None, help="Machine name")
-@click.option("--supabase-url", default=None, help="Supabase project URL")
-@click.option("--supabase-key", default=None, help="Supabase service_role key")
 @click.option("--machine-id", default=None, help="Pre-generated machine UUID")
 @click.option("--api-key", default=None, help="Pre-generated API key")
 def setup(
     non_interactive: bool,
     minimal: bool,
     machine_name: str | None,
-    supabase_url: str | None,
-    supabase_key: str | None,
     machine_id: str | None,
     api_key: str | None,
 ) -> None:
@@ -236,62 +232,49 @@ def setup(
             config["features"] = {**config["features"], **existing_config["features"]}
 
     if non_interactive:
-        if not machine_name or not supabase_url or not supabase_key:
-            click.echo("ERROR: --name, --supabase-url, --supabase-key are required in non-interactive mode.")
+        if not machine_name:
+            click.echo("ERROR: --name is required in non-interactive mode.")
             raise SystemExit(1)
         config["machine_name"] = machine_name
-        config["supabase_url"] = supabase_url
-        config["supabase_service_key"] = supabase_key
         if machine_id:
             config["machine_id"] = machine_id
-        elif not config.get("machine_id"):
-            config["machine_id"] = generate_machine_id()
         if api_key:
             config["api_key"] = api_key
-        elif not config.get("api_key"):
-            config["api_key"] = generate_api_key()
     else:
-        if existing_config:
-            default_name = existing_config.get("machine_name", platform.node())
-        else:
-            default_name = platform.node()
+        default_name = (existing_config or {}).get("machine_name", platform.node())
         config["machine_name"] = click.prompt("Machine name", default=default_name)
-        config["supabase_url"] = click.prompt(
-            "Supabase URL",
-            default=existing_config.get("supabase_url") if existing_config else None,
-        )
-        config["supabase_service_key"] = click.prompt(
-            "Supabase service_role key",
-            default=existing_config.get("supabase_service_key") if existing_config else None,
-        )
-        if not config.get("machine_id"):
-            config["machine_id"] = generate_machine_id()
-        if not config.get("api_key"):
-            config["api_key"] = generate_api_key()
 
     config["claude_data_dir"] = str(claude_dir)
     config["features"]["ccost_installed"] = ccost_installed
     config["features"]["ccost_path"] = ccost_path if ccost_installed else None
 
+    # Register the machine via the dashboard. The server creates the row and
+    # returns machine_id + api_key; agents authenticate to the ingest endpoint
+    # with api_key, so the DB credential never lives on this machine.
+    if not (config.get("machine_id") and config.get("api_key")):
+        import httpx
+        from .config import INGEST_BASE_URL
+
+        try:
+            resp = httpx.post(
+                f"{INGEST_BASE_URL}/api/generate-agent-config",
+                json={"name": config["machine_name"], "os": detect_os()},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            config["machine_id"] = data["machine_id"]
+            config["api_key"] = data["api_key"]
+            click.echo(f"Machine registered: {config['machine_name']} ({config['machine_id'][:8]}...)")
+        except Exception as e:
+            click.echo(f"ERROR: Could not register machine via dashboard: {e}", err=True)
+            click.echo(f"  Check that {INGEST_BASE_URL} is reachable, then retry.", err=True)
+            raise SystemExit(1)
+    else:
+        click.echo(f"Reusing machine: {config['machine_name']} ({config['machine_id'][:8]}...)")
+
     save_config(config)
     click.echo(f"\nConfig saved to {CONFIG_FILE}")
-
-    # Register machine in Supabase
-    try:
-        from supabase import create_client
-
-        client = create_client(config["supabase_url"], config["supabase_service_key"])
-        client.table("machines").upsert({
-            "id": config["machine_id"],
-            "name": config["machine_name"],
-            "api_key": config["api_key"],
-            "os": detect_os(),
-            "hostname": platform.node(),
-        }, on_conflict="id").execute()
-        click.echo(f"Machine registered: {config['machine_name']}")
-    except Exception as e:
-        click.echo(f"WARNING: Could not register machine: {e}")
-        click.echo("You can retry with 'cc-telemetry sync' after fixing the connection.")
 
     # --- Step 5: Full setup (unless --minimal) ---
     auto_configure = not minimal

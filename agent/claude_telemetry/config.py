@@ -22,8 +22,6 @@ INGEST_BASE_URL = "https://claude-ricegang.pages.dev"
 DEFAULT_CONFIG: dict[str, Any] = {
     "machine_id": None,
     "machine_name": None,
-    "supabase_url": None,
-    "supabase_service_key": None,
     "api_key": None,
     "claude_data_dir": str(Path.home() / ".claude"),
     "sync_interval_minutes": 15,

@@ -147,7 +147,7 @@ export function Machines() {
   const { data: machinesRaw } = useQuery({
     queryKey: ["machines", { active_only: false }],
     queryFn: () => fetchMachines(false) as Promise<Array<{ id: string; last_sync_at: string | null }>>,
-    refetchInterval: 30_000,
+    refetchInterval: 300_000,
   });
   const syncMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -165,7 +165,7 @@ export function Machines() {
       fetchDailyUsage(dateRange.start, dateRange.end) as Promise<
         Array<{ date: string; machine_id: string; cost_usd: number }>
       >,
-    refetchInterval: 30_000,
+    refetchInterval: 300_000,
   });
   const dailyByMachine = useMemo<Array<Record<string, number | string>>>(() => {
     if (!dailyRows) return [];

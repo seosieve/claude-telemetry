@@ -26,7 +26,7 @@ export function Overview() {
   const { data: machinesRaw } = useQuery({
     queryKey: ["machines", { active_only: false }],
     queryFn: () => fetchMachines(false) as Promise<Array<{ id: string; last_sync_at: string | null }>>,
-    refetchInterval: 30_000,
+    refetchInterval: 300_000,
   });
   const syncMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -39,7 +39,7 @@ export function Overview() {
   const { data: rateLimitsRecent } = useQuery({
     queryKey: ["rate-limits", machineId, "10"],
     queryFn: () => fetchRateLimits(machineId, "10") as Promise<Array<Record<string, unknown>>>,
-    refetchInterval: 30_000,
+    refetchInterval: 300_000,
   });
   const { rateLimits, resetAtMs } = useMemo(() => {
     if (!rateLimitsRecent) return { rateLimits: null, resetAtMs: null };
@@ -66,7 +66,7 @@ export function Overview() {
   const { data: rateLimitsWeekly } = useQuery({
     queryKey: ["rate-limits", undefined, "50"],
     queryFn: () => fetchRateLimits(undefined, "50") as Promise<Array<Record<string, unknown>>>,
-    refetchInterval: 30_000,
+    refetchInterval: 300_000,
   });
   const weeklyResetAtMs = useMemo(() => {
     if (!rateLimitsWeekly) return null;

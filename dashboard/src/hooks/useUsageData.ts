@@ -31,7 +31,8 @@ export function useUsageData(
 ): UsageData {
   const { machineId } = useMachineFilter();
   const { start, end } = dateRange;
-  const refetchInterval = opts?.polling ? 30_000 : undefined;
+  // 5 min: agent syncs ~every 15 min, so 30s polling just woke Neon for nothing.
+  const refetchInterval = opts?.polling ? 300_000 : undefined;
 
   const summaryQ = useQuery<UsageSummaryRow[]>({
     queryKey: ["usage-summary", start, end, machineId],

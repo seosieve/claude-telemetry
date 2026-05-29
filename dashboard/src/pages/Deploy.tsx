@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { generateAgentConfig, type AgentConfig } from "../lib/api";
 
 type OS = "windows" | "linux" | "macos";
 
@@ -25,31 +24,17 @@ interface CommandStep {
   warning?: string;
 }
 
-function getCommands(
-  os: OS,
-  config: AgentConfig,
-  machineName: string,
-): CommandStep[] {
+function getCommands(os: OS, machineName: string): CommandStep[] {
   const isWin = os === "windows";
-
-  const setupCmd = isWin
-    ? `cc-telemetry setup --non-interactive --name "${machineName}" --supabase-url "${config.supabase_url}" --supabase-key "PASTE_YOUR_KEY_HERE" --machine-id "${config.machine_id}"`
-    : [
-        `cc-telemetry setup --non-interactive \\`,
-        `  --name "${machineName}" \\`,
-        `  --supabase-url "${config.supabase_url}" \\`,
-        `  --supabase-key "PASTE_YOUR_KEY_HERE" \\`,
-        `  --machine-id "${config.machine_id}"`,
-      ].join("\n");
+  // setup registers the machine via the dashboard (which hands back its own
+  // api_key) — no database keys ever live on the machine.
+  const setupCmd = `cc-telemetry setup --non-interactive --name "${machineName}"`;
 
   return [
     {
       step: "1",
       label: "Install",
-      code: [
-        "npm install -g ccusage ccost",
-        "pip install cc-telemetry",
-      ].join("\n"),
+      code: ["npm install -g ccusage ccost", "pip install cc-telemetry"].join("\n"),
       warning: "Requires Node.js 18+ and Python 3.11+.",
     },
     {
@@ -57,7 +42,7 @@ function getCommands(
       label: "Run setup wizard",
       code: setupCmd,
       warning:
-        "Replace PASTE_YOUR_KEY_HERE with your Supabase service_role key (see the note above). The wizard configures hooks, MCP server, statusline, and daemon automatically.",
+        "Registers this machine with the dashboard (it receives its own api_key automatically) and configures hooks, MCP server, statusline, and daemon. No database keys needed on the machine.",
     },
     {
       step: "3",
@@ -86,60 +71,19 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-// Where the agent's service_role key comes from. We deliberately do NOT return
-// the key from /api/generate-agent-config (it's unauthenticated under guest
-// mode), so the user copies it once from the Supabase dashboard instead.
-function ServiceKeyNotice() {
-  return (
-    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-      <p className="text-xs text-amber-400">
-        {"🔐"}{" "}
-        <span className="font-semibold">service_role key</span> is not shown
-        here for security. Copy it once from{" "}
-        <span className="font-mono text-amber-300">
-          Supabase {"→"} Settings {"→"} API {"→"} service_role
-        </span>{" "}
-        and paste it into Step 2 in place of{" "}
-        <span className="font-mono">PASTE_YOUR_KEY_HERE</span>.
-      </p>
-    </div>
-  );
-}
-
 export function Deploy() {
   const [os, setOs] = useState<OS>(detectOS);
   const [machineName, setMachineName] = useState("");
-  const [config, setConfig] = useState<AgentConfig | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [showCommands, setShowCommands] = useState(false);
 
-  // Auto-suggest machine name when OS changes or on mount
-  useEffect(() => {
-    if (!machineName || machineName === suggestMachineName(os === "windows" ? "linux" : os === "linux" ? "macos" : "windows")) {
-      setMachineName(suggestMachineName(os));
-    }
-  }, [os]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Set initial suggestion on mount
+  // Initial machine-name suggestion on mount.
   useEffect(() => {
     setMachineName(suggestMachineName(detectOS()));
   }, []);
 
-  const handleGenerate = async () => {
-    if (!machineName.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const cfg = await generateAgentConfig(machineName.trim(), os);
-      setConfig(cfg);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to generate config");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const commands = config ? getCommands(os, config, machineName) : [];
+  const commands = showCommands && machineName.trim()
+    ? getCommands(os, machineName.trim())
+    : [];
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -159,7 +103,10 @@ export function Deploy() {
           <input
             type="text"
             value={machineName}
-            onChange={(e) => setMachineName(e.target.value)}
+            onChange={(e) => {
+              setMachineName(e.target.value);
+              setShowCommands(false);
+            }}
             placeholder="e.g., Desktop-Casa, Laptop-Work, Server-Prod"
             className="w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-sm outline-none focus:border-sky-500/50"
           />
@@ -187,30 +134,17 @@ export function Deploy() {
         </div>
 
         <button
-          onClick={handleGenerate}
-          disabled={loading || !machineName.trim()}
+          onClick={() => setShowCommands(true)}
+          disabled={!machineName.trim()}
           className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-600 disabled:opacity-50"
         >
-          {loading ? "Generating..." : "Generate Commands"}
+          Show setup commands
         </button>
-
-        {error && (
-          <p className="text-xs text-rose-400">{error}</p>
-        )}
       </div>
 
       {/* Generated commands */}
-      {config && (
+      {commands.length > 0 && (
         <div className="space-y-4">
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-            <p className="text-xs text-emerald-400">
-              Machine registered! ID:{" "}
-              <span className="font-mono">{config.machine_id.slice(0, 8)}...</span>
-            </p>
-          </div>
-
-          <ServiceKeyNotice />
-
           {commands.map((cmd) => (
             <div
               key={cmd.step}
