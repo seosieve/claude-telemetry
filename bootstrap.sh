@@ -17,10 +17,12 @@
 
 set -eu
 
-# Pin to a git tag, not a moving branch. Bump FORK_REF when you tag a new
-# stable release so machines converge on it; pushing to main no longer
-# auto-deploys to every PC the same night.
-FORK_REF="v0.3.4"
+# Track main so every machine converges on the latest fork code without a
+# tag bump after each change. Trade-off: a push to main auto-deploys to
+# every PC at the next 05:10 run — keep main always-deployable and do
+# experimental work on a branch. The --help self-check below still aborts
+# the daemon restart on a fully broken build.
+FORK_REF="main"
 FORK_URL="git+https://github.com/seosieve/claude-telemetry@${FORK_REF}#subdirectory=agent"
 DAEMON_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.plist"
 UPGRADE_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.auto-upgrade.plist"
