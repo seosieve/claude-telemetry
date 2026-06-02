@@ -1,11 +1,11 @@
 #!/bin/sh
-# RiceGang cc-telemetry bootstrap.
+# rice-gang cc-telemetry bootstrap.
 #
 # Usage (run once on each machine):
 #   curl -fsSL https://raw.githubusercontent.com/seosieve/claude-telemetry/main/bootstrap.sh | sh
 #
 # What this does:
-#   1. Replaces the upstream cc-telemetry pipx install with the RiceGang fork
+#   1. Replaces the upstream cc-telemetry pipx install with the rice-gang fork
 #      (git+https://github.com/seosieve/claude-telemetry@main#subdirectory=agent).
 #   2. Restarts the cc-telemetry launchd daemon so the new code takes effect.
 #   3. Installs an auto-upgrade LaunchAgent (com.cc-telemetry.auto-upgrade)
@@ -47,7 +47,7 @@ fi
 
 mkdir -p "$LOG_DIR"
 
-echo "[1/4] Installing cc-telemetry from RiceGang fork (${FORK_REF})..."
+echo "[1/4] Installing cc-telemetry from rice-gang fork (${FORK_REF})..."
 "$PIPX_BIN" install --force "$FORK_URL"
 
 # Self-check: confirm the freshly installed CLI actually runs before we restart
