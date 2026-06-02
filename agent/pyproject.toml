@@ -2,9 +2,15 @@
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# Single source of truth for the version: claude_telemetry.__version__.
+# pyproject reads it at build time (see [tool.setuptools.dynamic]) so the
+# package metadata and the CLI's --version can never drift apart again.
+[tool.setuptools.dynamic]
+version = {attr = "claude_telemetry.__version__"}
+
 [project]
 name = "cc-telemetry"
-version = "0.3.4"
+dynamic = ["version"]
 description = "Multi-PC Claude Code usage tracker — agent, real-time hooks, MCP server, and dashboard sync"
 readme = "README.md"
 license = "MIT"
