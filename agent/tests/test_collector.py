@@ -129,21 +129,34 @@ class TestCollectRateLimits:
         assert result is None
 
     @patch("claude_telemetry.collector._find_ccost", return_value="ccost")
-    @patch("claude_telemetry.collector._run_command")
-    def test_parses_rate_limit_data(self, mock_run: MagicMock, _mock_find: MagicMock) -> None:
-        mock_run.return_value = json.dumps([{
-            "timestamp": "2026-04-01T10:00:00Z",
-            "window_5h_percent": 15.5,
-            "window_1w_percent": 8.2,
-            "session_cost_usd": 1.50,
-            "session_duration_seconds": 3600,
-        }])
+    @patch("claude_telemetry.collector._ccost_view")
+    def test_parses_rate_limit_data(self, mock_view: MagicMock, _mock_find: MagicMock) -> None:
+        # Wide windows so they're always "active" regardless of the current time.
+        # The 5h view carries a stale per-5h-window weekly peak (90); the 1w view
+        # carries the real weekly value (8.2). collect_rate_limits must report the
+        # 1w view's value so a reset is reflected immediately.
+        view_5h = {"data": [{
+            "windowStart": "2020-01-01T00:00:00Z",
+            "windowEnd": "2099-01-01T00:00:00Z",
+            "maxFiveHourPct": 15.5,
+            "maxSevenDayPct": 90.0,
+            "totalCost": 1.50,
+        }]}
+        view_1w = {"data": [{
+            "windowStart": "2020-01-01T00:00:00Z",
+            "windowEnd": "2099-01-01T00:00:00Z",
+            "maxSevenDayPct": 8.2,
+        }]}
+        mock_view.side_effect = lambda _bin, per: view_5h if per == "5h" else view_1w
 
         result = collect_rate_limits()
         assert result is not None
         assert len(result) == 1
         assert result[0].window_5h_percent == 15.5
-        assert result[0].session_duration_seconds == 3600
+        # weekly % must come from the 1w view (8.2), NOT the 5h view's peak (90)
+        assert result[0].window_1w_percent == 8.2
+        assert result[0].weekly_reset_at == "2099-01-01T00:00:00+00:00"
+        assert result[0].session_cost_usd == 1.50
 
 
 class TestHelpers:

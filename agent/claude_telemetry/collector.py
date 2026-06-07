@@ -239,10 +239,18 @@ def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None
         else None
     )
 
+    # Weekly window: read both the reset time (windowEnd) AND the weekly
+    # percentage from the *active 1w window*. The 5h view's maxSevenDayPct is a
+    # per-5h-window maximum, so a 5h window that straddles the weekly reset keeps
+    # the pre-reset peak until it closes (up to ~5h of stale data). The 1w view's
+    # active window reflects the reset immediately, so prefer it; fall back to the
+    # 5h view only when the 1w view is unavailable.
     weekly_reset_at: str | None = None
+    weekly_percent = active.get("maxSevenDayPct")
     data_1w = _ccost_view(ccost_bin, "1w")
     w_entries = data_1w.get("data") if isinstance(data_1w, dict) else None
     if w_entries:
+        active_1w = None
         for entry in w_entries:
             we = entry.get("windowEnd")
             ws = entry.get("windowStart")
@@ -255,19 +263,23 @@ def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None
                 continue
             if ws_dt <= now < we_dt:
                 weekly_reset_at = we_dt.isoformat()
+                active_1w = entry
                 break
-        if weekly_reset_at is None:
-            we = w_entries[-1].get("windowEnd")
+        if active_1w is None:
+            active_1w = w_entries[-1]
+            we = active_1w.get("windowEnd")
             if we:
                 try:
                     weekly_reset_at = isoparse(we).isoformat()
                 except (ValueError, TypeError):
                     weekly_reset_at = None
+        if active_1w.get("maxSevenDayPct") is not None:
+            weekly_percent = active_1w.get("maxSevenDayPct")
 
     return [RateLimit(
         timestamp=now.isoformat(),
         window_5h_percent=active.get("maxFiveHourPct"),
-        window_1w_percent=active.get("maxSevenDayPct"),
+        window_1w_percent=weekly_percent,
         session_cost_usd=active.get("totalCost"),
         session_duration_seconds=duration_seconds,
         weekly_reset_at=weekly_reset_at,
