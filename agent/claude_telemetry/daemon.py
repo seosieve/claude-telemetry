@@ -34,8 +34,12 @@ def _setup_logging(verbose: bool = False) -> None:
         logger.addHandler(stream_handler)
 
 
-def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
-    """Run one full sync cycle. Returns {source: records_upserted}."""
+def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]:
+    """Run one full sync cycle.
+
+    Returns ({source: records_upserted}, weekly_reset_at|None). The weekly reset
+    timestamp lets the daemon wake right after the weekly window rolls over.
+    """
     from .sync import sync_daily_usage, sync_sessions, sync_rate_limits, sync_stats_extra, sync_blocks
 
     api_key = config["api_key"]
@@ -63,12 +67,15 @@ def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
         for err in r.errors:
             logger.warning("sessions error: %s", err)
 
-    # Rate limits (optional)
+    # Rate limits (optional). Capture weekly_reset_at so the daemon can wake
+    # right after the weekly window rolls over (see run_daemon).
+    weekly_reset_at: str | None = None
     if config.get("features", {}).get("ccost_installed"):
         rate_data = collect_rate_limits(ccost_path=config.get("features", {}).get("ccost_path"))
         if rate_data:
             r = sync_rate_limits(rate_data, api_key)
             results["rate_limits"] = r.records_upserted
+            weekly_reset_at = rate_data[0].weekly_reset_at
 
     # Stats extra
     claude_dir = Path(config.get("claude_data_dir", str(Path.home() / ".claude")))
@@ -83,7 +90,26 @@ def _run_sync_cycle(config: dict[str, Any]) -> dict[str, int]:
         r = sync_blocks(blocks, api_key)
         results["blocks"] = r.records_upserted
 
-    return results
+    return results, weekly_reset_at
+
+
+def _seconds_until_reset(weekly_reset_at: str | None, buffer: float = 90.0) -> float | None:
+    """Seconds from now until `buffer` seconds after the weekly reset.
+
+    Returns None when no reset timestamp is known or dateutil is unavailable,
+    so the caller falls back to the regular interval.
+    """
+    if not weekly_reset_at:
+        return None
+    try:
+        from dateutil.parser import isoparse
+    except ImportError:
+        return None
+    try:
+        reset_dt = isoparse(weekly_reset_at)
+    except (ValueError, TypeError):
+        return None
+    return (reset_dt - datetime.now(timezone.utc)).total_seconds() + buffer
 
 
 def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
@@ -128,7 +154,7 @@ def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
             config = load_config()
             logger.info("Starting sync cycle...")
 
-            results = _run_sync_cycle(config)
+            results, weekly_reset_at = _run_sync_cycle(config)
 
             total = sum(results.values())
             logger.info(
@@ -151,9 +177,21 @@ def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
             _sleep_interruptible(backoff, lambda: shutdown_requested)
             continue
 
-        # Sleep until next cycle
+        # Sleep until next cycle. If the weekly rate-limit window rolls over
+        # before (or just after) the next regular cycle, wake ~90s past the
+        # reset instead, so the refreshed weekly % lands in the dashboard right
+        # away. This fires at most once per week — after the reset sync,
+        # weekly_reset_at jumps to the next window and we revert to the interval.
         sleep_seconds = interval_minutes * 60
-        logger.debug("Next sync in %dm", interval_minutes)
+        reset_wake = _seconds_until_reset(weekly_reset_at)
+        if reset_wake is not None and 0 < reset_wake <= sleep_seconds + 600:
+            logger.info(
+                "Weekly reset at %s — scheduling refresh in %ds",
+                weekly_reset_at, int(reset_wake),
+            )
+            sleep_seconds = reset_wake
+        else:
+            logger.debug("Next sync in %dm", interval_minutes)
         _sleep_interruptible(sleep_seconds, lambda: shutdown_requested)
 
     logger.info("Daemon stopped.")

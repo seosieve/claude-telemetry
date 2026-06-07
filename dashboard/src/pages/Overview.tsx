@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MetricCard } from "../components/cards/MetricCard";
 import { MachineCard } from "../components/cards/MachineCard";
 import { DailyCostChart } from "../components/charts/DailyCostChart";
@@ -75,6 +75,22 @@ export function Overview() {
     const weeklyAt = row?.weekly_reset_at as string | undefined;
     return weeklyAt ? new Date(weeklyAt).getTime() : null;
   }, [rateLimitsWeekly]);
+
+  // When the weekly window is about to roll over, refetch rate limits a few
+  // minutes after the reset so the bar updates without waiting for the 5-min
+  // poll. The daemon re-syncs ~90s past the reset; we wait longer (3 min) so
+  // Neon already holds the refreshed value. Only armed within the last hour
+  // before reset — setTimeout can't reliably hold multi-day delays.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (weeklyResetAtMs == null) return;
+    const delay = weeklyResetAtMs - Date.now() + 180_000;
+    if (delay <= 0 || delay > 3_600_000) return;
+    const id = setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ["rate-limits"] });
+    }, delay);
+    return () => clearTimeout(id);
+  }, [weeklyResetAtMs, queryClient]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000);
