@@ -58,9 +58,9 @@
   <text class="tag" x="40" y="356">~/.claude/projects/*.jsonl</text>
   <text class="tag" x="40" y="370">Sync every 15 min</text>
 
-  <!-- ═══════════ SUPABASE SECTION ═══════════ -->
+  <!-- ═══════════ NEON SECTION ═══════════ -->
   <rect x="320" y="20" width="200" height="360" rx="16" stroke="#30363d" stroke-width="1" fill="#0d1117" fill-opacity="0.6"/>
-  <text class="title" x="340" y="50">Supabase</text>
+  <text class="title" x="340" y="50">Neon</text>
   <text class="sub" x="340" y="68">PostgreSQL (free tier)</text>
 
   <!-- Tables -->
@@ -76,7 +76,7 @@
   <rect x="340" y="226" width="160" height="36" rx="6" fill="#1c2a3a" stroke="#1f6feb" stroke-width="0.5"/>
   <text class="label" x="420" y="249" text-anchor="middle">rate_limits</text>
 
-  <!-- Supabase tech tags -->
+  <!-- Neon tech tags -->
   <rect x="340" y="280" width="40" height="22" rx="11" fill="#1f3a1f" stroke="#238636" stroke-width="0.5"/>
   <text x="360" y="295" text-anchor="middle" font-size="10" fill="#3fb950">RLS</text>
 
@@ -132,13 +132,13 @@
   <text x="725" y="361" text-anchor="middle" font-size="10" fill="#bc8cff">dark theme</text>
 
   <!-- ═══════════ ARROWS ═══════════ -->
-  <!-- Agents → Supabase -->
+  <!-- Agents → Neon -->
   <line x1="250" y1="110" x2="336" y2="106" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-g)"/>
   <line x1="250" y1="164" x2="336" y2="152" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-g)"/>
   <line x1="250" y1="218" x2="336" y2="198" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-g)"/>
   <line x1="250" y1="272" x2="336" y2="244" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr-g)"/>
 
-  <!-- Supabase ← Cloudflare Worker -->
+  <!-- Neon ← Cloudflare Worker -->
   <line x1="570" y1="116" x2="504" y2="152" stroke="#d29922" stroke-width="1.5" marker-end="url(#arr-a)"/>
 
   <!-- Arrow labels -->
