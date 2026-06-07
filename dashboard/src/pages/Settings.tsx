@@ -150,15 +150,6 @@ export function Settings() {
     }
   }, [deleteTarget, queryClient]);
 
-  const configQ = useQuery<{ allowed_emails: string[] }>({
-    queryKey: ["config"],
-    queryFn: () =>
-      fetch("/api/config", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("claude_tracker_token") || ""}` },
-      }).then((r) => r.json()),
-  });
-  const allowedEmails = configQ.data?.allowed_emails ?? [];
-
   const saveThresholds = () => {
     save({
       alert_thresholds: {
@@ -315,21 +306,25 @@ export function Settings() {
         </p>
       </div>
 
-      {/* Authorized emails */}
+      {/* Access */}
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-        <h3 className="mb-3 text-sm font-medium">Authorized Emails</h3>
-        {allowedEmails.length > 0 ? (
-          <ul className="space-y-1">
-            {allowedEmails.map((email, i) => (
-              <li key={i} className="text-xs font-mono text-slate-300">{email}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-xs text-slate-500">No email restrictions configured (all emails allowed).</p>
-        )}
+        <h3 className="mb-3 text-sm font-medium">Access</h3>
+        <p className="text-xs text-slate-500">
+          This dashboard runs in <span className="text-slate-300">guest mode</span> — no login is
+          required, so anyone with the URL can view it. Email-based login was intentionally
+          disabled in this fork for simpler day-to-day access.
+        </p>
         <p className="mt-3 text-[10px] text-slate-600">
-          To add or remove emails, update the ALLOWED_EMAILS secret in Cloudflare:{" "}
-          <code className="text-slate-400">npx wrangler pages secret put ALLOWED_EMAILS</code>
+          To restrict who can view it, put the deployment behind{" "}
+          <a
+            href="https://developers.cloudflare.com/cloudflare-one/policies/access/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-slate-400 underline hover:text-slate-200"
+          >
+            Cloudflare Access
+          </a>{" "}
+          or an equivalent reverse proxy.
         </p>
       </div>
 

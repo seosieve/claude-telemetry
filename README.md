@@ -22,7 +22,7 @@
 
 CLI tools like [ccusage](https://github.com/ryoppippi/ccusage) and ccost are single-machine. If you use Claude Code across multiple PCs, you have no unified view of your total spending.
 
-**claude-telemetry** solves this with an Elastic/Wazuh-style architecture: a lightweight Python agent on each PC auto-syncs usage data to a central Supabase database, and a React dashboard shows everything aggregated with filters by machine, project, model, and time period.
+**claude-telemetry** solves this with an Elastic/Wazuh-style architecture: a lightweight Python agent on each PC auto-syncs usage data to a central Neon Postgres database (via a Cloudflare Pages ingest endpoint), and a React dashboard shows everything aggregated with filters by machine, project, model, and time period.
 
 The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing/pricing layer and focuses only on multi-PC aggregation and centralized sync.
 
@@ -39,8 +39,7 @@ The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing
 - **Weekly usage reports** with daily/weekly toggle
 - Cross-machine usage pace comparison
 - Model mix analysis (Opus/Sonnet/Haiku breakdown)
-- Supabase Auth (magic link login) with email whitelist
-- Cloudflare Workers proxy (zero exposed keys in frontend)
+- Cloudflare Pages Functions proxy — the DB connection string stays server-side, zero secrets in the browser bundle
 - Deploy page with copy-paste agent install commands
 - Statusline auto-setup for rate limit tracking
 - Export data as CSV/JSON
@@ -54,20 +53,13 @@ The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing
 
 ## Quick Start
 
-### Step 1 — Supabase (free tier)
+### Step 1 — Neon (free tier)
 
-1. Create account at [supabase.com](https://supabase.com)
+1. Create account at [neon.tech](https://neon.tech)
 2. New Project — choose name and region
-3. SQL Editor — paste and run each migration in order:
-   1. [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql)
-   2. [`supabase/migrations/002_stats_extra_unique.sql`](supabase/migrations/002_stats_extra_unique.sql)
-   3. [`supabase/migrations/003_user_preferences.sql`](supabase/migrations/003_user_preferences.sql)
-   4. [`supabase/migrations/004_blocks.sql`](supabase/migrations/004_blocks.sql)
-   5. [`supabase/migrations/005_notifications.sql`](supabase/migrations/005_notifications.sql)
-4. Authentication > URL Configuration:
-   - **Site URL:** `https://your-app.pages.dev`
-   - **Redirect URLs:** add same URL
-5. Settings > API — copy **Project URL** and **service_role key**
+3. SQL Editor — paste and run [`neon/schema.sql`](neon/schema.sql) (creates all tables, constraints, and RPC functions)
+4. Copy the **connection string** (Project Dashboard → Connect), e.g.
+   `postgresql://USER:PASSWORD@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require`
 
 ### Step 2 — Dashboard (Cloudflare Pages)
 
@@ -76,9 +68,7 @@ git clone https://github.com/seosieve/claude-telemetry.git
 cd claude-telemetry/dashboard
 npm install
 npx wrangler pages project create claude-telemetry
-npx wrangler pages secret put SUPABASE_URL        # paste Project URL
-npx wrangler pages secret put SUPABASE_SERVICE_KEY # paste service_role key
-npx wrangler pages secret put ALLOWED_EMAILS       # e.g. "you@email.com,friend@email.com"
+npx wrangler pages secret put DATABASE_URL         # paste Neon connection string
 npx wrangler pages secret put CRON_SECRET          # random string for webhook cron auth
 npm run build
 npx wrangler pages deploy dist
@@ -93,7 +83,8 @@ npm install -g ccusage ccost
 # Install
 pip install cc-telemetry
 
-# Setup wizard (configures hooks, MCP, statusline, daemon — all in one)
+# Setup wizard (configures hooks, MCP, statusline, daemon — all in one).
+# The agent registers itself with the dashboard and receives its api_key.
 cc-telemetry setup
 
 # Verify
@@ -148,7 +139,7 @@ cc-telemetry setup
 
 | Command | Description |
 |---|---|
-| `cc-telemetry sync` | Manual sync to Supabase |
+| `cc-telemetry sync` | Manual sync to the dashboard |
 | `cc-telemetry sync --verbose` | Sync with detailed output |
 | `cc-telemetry sync --force` | Re-sync all data |
 | `cc-telemetry status` | Show config and last sync |
@@ -171,14 +162,9 @@ cc-telemetry setup
 
 ## Security
 
-- **Dashboard access**: Only emails listed in `ALLOWED_EMAILS` can log in. Set via:
-  ```bash
-  npx wrangler pages secret put ALLOWED_EMAILS
-  # value: "you@email.com" or "you@email.com,teammate@email.com"
-  ```
-- **API proxy**: All Supabase keys are server-side only (Cloudflare Workers). Zero secrets in the browser bundle.
-- **Agent auth**: Each machine uses a unique API key stored locally in `~/.claude-telemetry/config.json`.
-- **RLS**: Row-Level Security ensures each user only sees their own machines and data.
+- **API proxy**: The Neon connection string lives only in Cloudflare Pages Functions (server-side). Zero secrets in the browser bundle.
+- **Agent auth**: Each machine uses a unique API key (stored locally in `~/.claude-telemetry/config.json`) to authenticate to the ingest endpoint. The DB credential never lives on the agent machine.
+- **Dashboard access**: The dashboard runs in **guest mode** — there is no login. If you need to restrict who can view it, put it behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) or an equivalent reverse proxy.
 
 ## Uninstall
 
@@ -209,9 +195,9 @@ npx wrangler pages project delete claude-telemetry
 # Or: Cloudflare Dashboard > Workers & Pages > claude-telemetry > Settings > Delete project
 ```
 
-**Step 3 — Delete Supabase project**
+**Step 3 — Delete Neon project**
 
-Supabase Dashboard > Project Settings > General > Delete project.
+Neon Console > Project Settings > Delete project.
 This permanently deletes all data.
 
 After these 3 steps, nothing remains — no data, no services, no secrets.
@@ -222,9 +208,8 @@ After these 3 steps, nothing remains — no data, no services, no secrets.
 |---|---|---|
 | Agent | Python 3.11+, ccusage | Local (each PC) |
 | Dashboard | React 18, Vite, TailwindCSS, Recharts | Cloudflare Pages |
-| Database | PostgreSQL | Supabase (free tier) |
-| Auth | Magic Link | Supabase Auth |
-| API Proxy | Pages Functions | Cloudflare Workers |
+| Database | PostgreSQL | Neon (free tier) |
+| API Proxy | Pages Functions | Cloudflare Pages |
 
 ## Releases
 

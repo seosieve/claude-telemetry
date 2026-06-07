@@ -18,7 +18,6 @@ types.setTypeParser(1082, (v: string) => v); // DATE → keep "YYYY-MM-DD" (avoi
 export interface Env {
   DATABASE_URL: string;
   CRON_SECRET?: string;
-  ALLOWED_EMAILS?: string;
 }
 
 // Returns a tagged-template SQL function: await sql`select ... ${val}`.

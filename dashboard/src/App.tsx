@@ -8,7 +8,6 @@ import { useAlertThresholds } from "./hooks/useAlertThresholds";
 import { daysAgo, today } from "./lib/dateUtils";
 import { Layout } from "./components/layout/Layout";
 import { Spinner } from "./components/Spinner";
-import { Login } from "./pages/Login";
 import { Overview } from "./pages/Overview";
 import { Daily } from "./pages/Daily";
 import { Blocks } from "./pages/Blocks";
@@ -59,7 +58,7 @@ function PageRouter({ page }: { page: string }) {
 }
 
 function AuthenticatedApp() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isLoading } = useAuth();
 
   const [page, setPage] = useState(() => {
     const hash = window.location.hash.slice(1);
@@ -97,10 +96,6 @@ function AuthenticatedApp() {
         </div>
       </div>
     );
-  }
-
-  if (!isAuthenticated) {
-    return <Login />;
   }
 
   return (

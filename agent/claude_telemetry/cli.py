@@ -145,7 +145,7 @@ def setup(
 ) -> None:
     """Setup wizard — configure everything in one command.
 
-    Configures Supabase connection, verifies dependencies, sets up
+    Configures the dashboard connection, verifies dependencies, sets up
     real-time hooks, MCP server, statusline, and daemon service.
     """
     click.echo("=== Claude Telemetry — Setup Wizard ===\n")
@@ -208,7 +208,7 @@ def setup(
     click.echo(f"  Claude dir: {claude_dir} ({'exists' if claude_dir.exists() else 'NOT FOUND'})")
     click.echo()
 
-    # --- Step 4: Config (Supabase connection + machine) ---
+    # --- Step 4: Config (dashboard connection + machine) ---
     existing_config: dict | None = None
     if CONFIG_FILE.exists():
         existing_config = json.loads(CONFIG_FILE.read_text())
@@ -549,7 +549,7 @@ def uninstall(yes: bool) -> None:
     if not yes:
         click.confirm(
             "This will remove all cc-telemetry config from this machine. "
-            "Data in Supabase is NOT affected. Continue?",
+            "Data on the server is NOT affected. Continue?",
             default=False,
             abort=True,
         )
@@ -576,7 +576,7 @@ def uninstall(yes: bool) -> None:
     click.echo(
         "\nAgent removed from this machine.\n"
         "To also delete your data from the server, remove the machine from\n"
-        "the dashboard Settings page or delete the Supabase project."
+        "the dashboard Settings page."
     )
 
 
@@ -1145,7 +1145,7 @@ def status() -> None:
 @click.option("--sessions", is_flag=True, help="Show session data")
 @click.option("--projects", is_flag=True, help="Show project summary")
 def local(daily: bool, sessions: bool, projects: bool) -> None:
-    """Show local data without sending to Supabase."""
+    """Show local data without sending to the server."""
     if not (daily or sessions or projects):
         daily = True
 

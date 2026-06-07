@@ -1,6 +1,6 @@
 # Claude Telemetry Agent
 
-Lightweight Python agent that collects Claude Code usage data and syncs to Supabase.
+Lightweight Python agent that collects Claude Code usage data and syncs it to the dashboard's ingest endpoint (backed by Neon Postgres).
 
 ## Features
 
@@ -15,7 +15,7 @@ Lightweight Python agent that collects Claude Code usage data and syncs to Supab
 
 - Python 3.11+
 - Node.js 18+ (for `npx ccusage`)
-- Supabase project (see [supabase/README.md](../supabase/README.md))
+- A deployed dashboard (provides the ingest endpoint the agent registers with — see the [root README](../README.md))
 
 ## Install
 
@@ -37,18 +37,19 @@ pip install -e .
 ## Setup
 
 ```bash
-# Full setup wizard (configures hooks, MCP, statusline, daemon — all in one)
+# Full setup wizard (configures hooks, MCP, statusline, daemon — all in one).
+# Registers this machine with the dashboard and receives its api_key.
 cc-telemetry setup
 
 # Minimal setup (config + first sync only, no hooks/MCP/statusline)
 cc-telemetry setup --minimal
 
-# Non-interactive (from Deploy page)
+# Non-interactive (the Deploy page generates this command with a pre-issued
+# machine-id + api-key, so no DB credentials ever touch the agent)
 cc-telemetry setup --non-interactive \
   --name "My PC" \
-  --supabase-url "https://xxx.supabase.co" \
-  --supabase-key "eyJ..." \
-  --machine-id "uuid"
+  --machine-id "uuid" \
+  --api-key "ct_..."
 
 # Verify everything is working
 cc-telemetry doctor
@@ -70,7 +71,7 @@ cc-telemetry doctor
 
 | Command | Description |
 |---|---|
-| `cc-telemetry sync` | Manual sync to Supabase |
+| `cc-telemetry sync` | Manual sync to the dashboard |
 | `cc-telemetry sync --verbose` | Sync with detailed output |
 | `cc-telemetry sync --force` | Re-sync all data |
 | `cc-telemetry status` | Show config and last sync |
@@ -99,7 +100,7 @@ The agent does **not** parse JSONL files directly. It calls `ccusage` as the par
 2. `npx ccusage session --json` — session-level usage
 3. Reads `~/.claude/stats-cache.json` — hour counts, activity data
 4. Adds `machine_id` to all records
-5. UPSERTs to Supabase with incremental sync
+5. POSTs to the dashboard ingest endpoint with incremental sync (the endpoint upserts into Neon)
 
 When **hooks** are configured, sync also triggers automatically on session end (with 2-minute debounce).
 

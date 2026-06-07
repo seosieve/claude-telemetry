@@ -65,7 +65,7 @@ def load_config() -> dict[str, Any]:
 
 def save_config(config: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    # config.json holds the Supabase service_role key in plaintext, so keep the
+    # config.json holds the api_key, so keep the
     # directory and file owner-only (0700/0600). No-op on Windows.
     try:
         os.chmod(CONFIG_DIR, 0o700)
