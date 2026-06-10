@@ -114,23 +114,26 @@ class TestCollectSessionUsage:
 
 
 class TestCollectRateLimits:
+    @patch("claude_telemetry.collector._read_statusline_rate_limit", return_value=None)
     @patch("claude_telemetry.collector._run_command")
-    def test_returns_none_when_not_installed(self, mock_run: MagicMock) -> None:
+    def test_returns_none_when_not_installed(self, mock_run: MagicMock, _mock_sl: MagicMock) -> None:
         mock_run.side_effect = FileNotFoundError
 
         result = collect_rate_limits()
         assert result is None
 
+    @patch("claude_telemetry.collector._read_statusline_rate_limit", return_value=None)
     @patch("claude_telemetry.collector._run_command")
-    def test_returns_none_on_error(self, mock_run: MagicMock) -> None:
+    def test_returns_none_on_error(self, mock_run: MagicMock, _mock_sl: MagicMock) -> None:
         mock_run.side_effect = CollectorError("ccost failed")
 
         result = collect_rate_limits()
         assert result is None
 
+    @patch("claude_telemetry.collector._read_statusline_rate_limit", return_value=None)
     @patch("claude_telemetry.collector._find_ccost", return_value="ccost")
     @patch("claude_telemetry.collector._ccost_view")
-    def test_parses_rate_limit_data(self, mock_view: MagicMock, _mock_find: MagicMock) -> None:
+    def test_parses_rate_limit_data(self, mock_view: MagicMock, _mock_find: MagicMock, _mock_sl: MagicMock) -> None:
         # Wide windows so they're always "active" regardless of the current time.
         # maxSevenDayPct is a per-window PEAK. On a regular weekly reset the 5h
         # window straddling the reset stays peaked (90) while the 1w window is
@@ -159,10 +162,11 @@ class TestCollectRateLimits:
         assert result[0].weekly_reset_at == "2099-01-01T00:00:00+00:00"
         assert result[0].session_cost_usd == 1.50
 
+    @patch("claude_telemetry.collector._read_statusline_rate_limit", return_value=None)
     @patch("claude_telemetry.collector._find_ccost", return_value="ccost")
     @patch("claude_telemetry.collector._ccost_view")
     def test_weekly_pct_offcycle_reset_prefers_fresh_window(
-        self, mock_view: MagicMock, _mock_find: MagicMock
+        self, mock_view: MagicMock, _mock_find: MagicMock, _mock_sl: MagicMock
     ) -> None:
         # Off-cycle reset (e.g. a mid-week limit refresh that doesn't align with
         # the fixed weekly window): the 1w window keeps its pre-reset peak (43)
@@ -185,6 +189,26 @@ class TestCollectRateLimits:
         result = collect_rate_limits()
         assert result is not None
         assert result[0].window_1w_percent == 6.0
+
+    @patch("claude_telemetry.collector._read_statusline_rate_limit")
+    def test_prefers_statusline_live_value(self, mock_sl: MagicMock) -> None:
+        # The statusline feed carries the API's live usage. collect_rate_limits
+        # uses it directly (no ccost window aggregation), so a reset is reflected
+        # immediately even on a single machine.
+        mock_sl.return_value = {
+            "five_hour_pct": 66,
+            "seven_day_pct": 16,
+            "five_hour_reset": 1781086200,
+            "seven_day_reset": 1781406000,
+            "session_cost": 1.25,
+        }
+
+        result = collect_rate_limits()
+        assert result is not None
+        assert result[0].window_5h_percent == 66
+        assert result[0].window_1w_percent == 16
+        assert result[0].session_cost_usd == 1.25
+        assert result[0].weekly_reset_at is not None
 
 
 class TestHelpers:

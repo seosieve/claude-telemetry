@@ -71,7 +71,10 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]
     # right after the weekly window rolls over (see run_daemon).
     weekly_reset_at: str | None = None
     if config.get("features", {}).get("ccost_installed"):
-        rate_data = collect_rate_limits(ccost_path=config.get("features", {}).get("ccost_path"))
+        rate_data = collect_rate_limits(
+            ccost_path=config.get("features", {}).get("ccost_path"),
+            claude_dir=config.get("claude_data_dir"),
+        )
         if rate_data:
             r = sync_rate_limits(rate_data, api_key)
             results["rate_limits"] = r.records_upserted

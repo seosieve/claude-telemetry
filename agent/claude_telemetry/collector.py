@@ -179,17 +179,121 @@ def _ccost_view(ccost_bin: str, per: str) -> dict | None:
                 pass
 
 
-def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None:
-    """Call `ccost sl --output json` (5h + 1w views) and parse active windows.
+def _tail_lines(path: os.PathLike[str] | str, n: int) -> list[str]:
+    """Return up to the last n lines of a (possibly large) file efficiently."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        data = b""
+        block = 8192
+        while size > 0 and data.count(b"\n") <= n:
+            step = min(block, size)
+            size -= step
+            f.seek(size)
+            data = f.read(step) + data
+        return data.decode("utf-8", errors="replace").splitlines()
 
-    ccost writes its JSON report to a file (default: ccost.json in cwd), not
-    stdout. We use --filename with a temp file so the report doesn't pollute
-    the working directory. The active 5h window is identified by
-    windowStart <= now < windowEnd; we report session_duration_seconds as
-    (now - windowStart) so that reset_at = timestamp + 5h - duration ≡ windowEnd.
-    We additionally call `--per 1w` to obtain the weekly window's windowEnd,
-    stored as weekly_reset_at (ISO 8601). Returns None if ccost is unavailable.
+
+def _read_statusline_rate_limit(
+    claude_dir: os.PathLike[str] | str | None = None,
+) -> dict | None:
+    """Read the newest live rate-limit reading from ~/.claude/statusline.jsonl.
+
+    Claude Code passes the account's *current* usage to the statusline command on
+    stdin; statusline.sh appends each call as {"ts": <epoch>, "data": <json>}. The
+    latest record's data.rate_limits reflects the API's live 5h / 7d usage — with
+    no peak/min window aggregation — so a rate-limit reset shows up immediately,
+    even on a single machine. Returns None when the file or the rate_limits feed
+    is absent (e.g. plans where the API doesn't report usage).
     """
+    from pathlib import Path
+
+    base = Path(claude_dir) if claude_dir else (Path.home() / ".claude")
+    path = base / "statusline.jsonl"
+    if not path.exists():
+        return None
+    try:
+        lines = _tail_lines(path, 500)
+    except OSError:
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        data = rec.get("data") or {}
+        rl = data.get("rate_limits") or {}
+        five_hour = rl.get("five_hour") or {}
+        seven_day = rl.get("seven_day") or {}
+        if (
+            five_hour.get("used_percentage") is None
+            and seven_day.get("used_percentage") is None
+        ):
+            continue
+        return {
+            "five_hour_pct": five_hour.get("used_percentage"),
+            "seven_day_pct": seven_day.get("used_percentage"),
+            "five_hour_reset": five_hour.get("resets_at"),
+            "seven_day_reset": seven_day.get("resets_at"),
+            "session_cost": (data.get("cost") or {}).get("total_cost_usd"),
+        }
+    return None
+
+
+def collect_rate_limits(
+    ccost_path: str | None = None,
+    claude_dir: os.PathLike[str] | str | None = None,
+) -> list[RateLimit] | None:
+    """Collect the current 5h / weekly rate-limit usage.
+
+    Primary source: the live values Claude Code reports to the statusline
+    (~/.claude/statusline.jsonl). These are the API's *current* usage figures, so
+    a reset is reflected immediately and a single machine reads correctly —
+    unlike ccost's per-window peak, which can stay stale across a reset that
+    doesn't align with a window boundary.
+
+    Fallback (statusline feed lacks rate_limits, e.g. on plans where the API
+    doesn't report usage): ccost's 5h + 1w views. The active 5h window gives
+    windowStart (→ session_duration_seconds, so reset_at = timestamp + 5h -
+    duration ≡ windowEnd); the weekly % is the min of both active windows'
+    maxSevenDayPct (a peak, so the fresher window wins) and the 1w window's
+    windowEnd is weekly_reset_at. Returns None if neither source is available.
+    """
+    now = datetime.now(timezone.utc)
+
+    sl = _read_statusline_rate_limit(claude_dir)
+    if sl is not None:
+        weekly_reset_at: str | None = None
+        if sl["seven_day_reset"]:
+            try:
+                weekly_reset_at = datetime.fromtimestamp(
+                    sl["seven_day_reset"], timezone.utc
+                ).isoformat()
+            except (ValueError, TypeError, OSError):
+                pass
+        # Encode the 5h reset as session_duration_seconds so the dashboard's
+        # "resets in" countdown (timestamp + 5h - duration) lands on the real
+        # five_hour reset time.
+        duration_seconds: int | None = None
+        if sl["five_hour_reset"]:
+            try:
+                duration_seconds = int(
+                    5 * 3600 - (sl["five_hour_reset"] - now.timestamp())
+                )
+            except (ValueError, TypeError):
+                pass
+        return [RateLimit(
+            timestamp=now.isoformat(),
+            window_5h_percent=sl["five_hour_pct"],
+            window_1w_percent=sl["seven_day_pct"],
+            session_cost_usd=sl["session_cost"],
+            session_duration_seconds=duration_seconds,
+            weekly_reset_at=weekly_reset_at,
+        )]
+
     try:
         ccost_bin = ccost_path or _find_ccost()
     except FileNotFoundError:
@@ -208,7 +312,6 @@ def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None
     if not entries:
         return None
 
-    now = datetime.now(timezone.utc)
     active = None
     latest_start = None
     for entry in entries:

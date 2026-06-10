@@ -87,6 +87,7 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
     # Rate limits (ccost) — keeps the 5h percent and reset countdown fresh
     rate_limits = collect_rate_limits(
         config.get("features", {}).get("ccost_path"),
+        claude_dir=config.get("claude_data_dir"),
     )
     if rate_limits:
         r = sync_rate_limits(rate_limits, api_key)
