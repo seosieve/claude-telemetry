@@ -132,9 +132,10 @@ class TestCollectRateLimits:
     @patch("claude_telemetry.collector._ccost_view")
     def test_parses_rate_limit_data(self, mock_view: MagicMock, _mock_find: MagicMock) -> None:
         # Wide windows so they're always "active" regardless of the current time.
-        # The 5h view carries a stale per-5h-window weekly peak (90); the 1w view
-        # carries the real weekly value (8.2). collect_rate_limits must report the
-        # 1w view's value so a reset is reflected immediately.
+        # maxSevenDayPct is a per-window PEAK. On a regular weekly reset the 5h
+        # window straddling the reset stays peaked (90) while the 1w window is
+        # already fresh (8.2). collect_rate_limits reports the min of the two
+        # active windows, so the fresh value (8.2) wins.
         view_5h = {"data": [{
             "windowStart": "2020-01-01T00:00:00Z",
             "windowEnd": "2099-01-01T00:00:00Z",
@@ -153,10 +154,37 @@ class TestCollectRateLimits:
         assert result is not None
         assert len(result) == 1
         assert result[0].window_5h_percent == 15.5
-        # weekly % must come from the 1w view (8.2), NOT the 5h view's peak (90)
+        # weekly % is min(5h peak 90, 1w 8.2) → the fresh 1w value
         assert result[0].window_1w_percent == 8.2
         assert result[0].weekly_reset_at == "2099-01-01T00:00:00+00:00"
         assert result[0].session_cost_usd == 1.50
+
+    @patch("claude_telemetry.collector._find_ccost", return_value="ccost")
+    @patch("claude_telemetry.collector._ccost_view")
+    def test_weekly_pct_offcycle_reset_prefers_fresh_window(
+        self, mock_view: MagicMock, _mock_find: MagicMock
+    ) -> None:
+        # Off-cycle reset (e.g. a mid-week limit refresh that doesn't align with
+        # the fixed weekly window): the 1w window keeps its pre-reset peak (43)
+        # while the post-reset 5h window is fresh (6). min() must pick the fresh
+        # 5h value so the dashboard reflects the reset immediately.
+        view_5h = {"data": [{
+            "windowStart": "2020-01-01T00:00:00Z",
+            "windowEnd": "2099-01-01T00:00:00Z",
+            "maxFiveHourPct": 13.0,
+            "maxSevenDayPct": 6.0,
+            "totalCost": 1.0,
+        }]}
+        view_1w = {"data": [{
+            "windowStart": "2020-01-01T00:00:00Z",
+            "windowEnd": "2099-01-01T00:00:00Z",
+            "maxSevenDayPct": 43.0,
+        }]}
+        mock_view.side_effect = lambda _bin, per: view_5h if per == "5h" else view_1w
+
+        result = collect_rate_limits()
+        assert result is not None
+        assert result[0].window_1w_percent == 6.0
 
 
 class TestHelpers:

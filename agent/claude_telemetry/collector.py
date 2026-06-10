@@ -239,12 +239,21 @@ def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None
         else None
     )
 
-    # Weekly window: read both the reset time (windowEnd) AND the weekly
-    # percentage from the *active 1w window*. The 5h view's maxSevenDayPct is a
-    # per-5h-window maximum, so a 5h window that straddles the weekly reset keeps
-    # the pre-reset peak until it closes (up to ~5h of stale data). The 1w view's
-    # active window reflects the reset immediately, so prefer it; fall back to the
-    # 5h view only when the 1w view is unavailable.
+    # Weekly window: read the reset time (windowEnd) from the active 1w window,
+    # and the weekly percentage from whichever active window is *fresher*.
+    #
+    # ccost's maxSevenDayPct is a per-window PEAK, not the current value: a window
+    # that opened before a rate-limit reset keeps the pre-reset peak until it
+    # closes. Which view is stale depends on when the reset landed:
+    #   * a regular weekly reset aligns with the 1w window boundary, so the 1w
+    #     active window is fresh — but the 5h window straddling the reset stays
+    #     peaked for up to ~5h;
+    #   * an off-cycle reset (e.g. a mid-week limit refresh) lands *inside* the
+    #     fixed weekly window, so the 1w window keeps its pre-reset peak while the
+    #     post-reset 5h window is already fresh.
+    # A reset only pushes true usage DOWN, so the fresher active window always
+    # reports the smaller peak. Take the min of both active windows' maxSevenDayPct
+    # (falling back to whichever view is available).
     weekly_reset_at: str | None = None
     weekly_percent = active.get("maxSevenDayPct")
     data_1w = _ccost_view(ccost_bin, "1w")
@@ -273,8 +282,11 @@ def collect_rate_limits(ccost_path: str | None = None) -> list[RateLimit] | None
                     weekly_reset_at = isoparse(we).isoformat()
                 except (ValueError, TypeError):
                     weekly_reset_at = None
-        if active_1w.get("maxSevenDayPct") is not None:
-            weekly_percent = active_1w.get("maxSevenDayPct")
+        pct_1w = active_1w.get("maxSevenDayPct")
+        if pct_1w is not None:
+            weekly_percent = (
+                pct_1w if weekly_percent is None else min(weekly_percent, pct_1w)
+            )
 
     return [RateLimit(
         timestamp=now.isoformat(),

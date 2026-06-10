@@ -13,6 +13,7 @@ import { useUsageData } from "../hooks/useUsageData";
 import { usePreferences } from "../hooks/usePreferences";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { fetchRateLimits, fetchMachines } from "../lib/api";
+import { accountWeeklyPct } from "../lib/rateLimits";
 import { rangeToDate, formatTokens, fillDateGaps } from "../lib/dateUtils";
 
 export function Overview() {
@@ -75,6 +76,15 @@ export function Overview() {
     const weeklyAt = row?.weekly_reset_at as string | undefined;
     return weeklyAt ? new Date(weeklyAt).getTime() : null;
   }, [rateLimitsWeekly]);
+
+  // Account-wide weekly %: aggregate the latest reading per machine rather than
+  // trusting whichever single row synced most recently. Machines report the
+  // shared weekly limit independently, so a pre-reset peak on one machine would
+  // otherwise flicker against a post-reset value on another (see accountWeeklyPct).
+  const weekly1wPct = useMemo(
+    () => accountWeeklyPct(rateLimitsWeekly),
+    [rateLimitsWeekly],
+  );
 
   // When the weekly window is about to roll over, refetch rate limits a few
   // minutes after the reset so the bar updates without waiting for the 5-min
@@ -231,9 +241,9 @@ export function Overview() {
       </div>
 
       {/* Rate limit bars */}
-      {rateLimits && (rateLimits.window_5h_percent != null || rateLimits.window_1w_percent != null) && (
+      {((rateLimits && rateLimits.window_5h_percent != null) || weekly1wPct != null) && (
         <div className="grid grid-cols-2 gap-4">
-          {rateLimits.window_5h_percent != null && (
+          {rateLimits && rateLimits.window_5h_percent != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
                 <p className="text-xs font-medium text-slate-400">Rate Limit (5h)</p>
@@ -253,7 +263,7 @@ export function Overview() {
               <p className="mt-2 text-xs font-mono text-slate-400">{rateLimits.window_5h_percent.toFixed(0)}%</p>
             </div>
           )}
-          {rateLimits.window_1w_percent != null && (
+          {weekly1wPct != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
                 <p className="text-xs font-medium text-slate-400">Rate Limit (1w)</p>
@@ -262,15 +272,15 @@ export function Overview() {
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
                   className={`h-3 rounded-full transition-all ${
-                    rateLimits.window_1w_percent > 80 ? "bg-fuchsia-500" : rateLimits.window_1w_percent > 50 ? "bg-amber-500" : "bg-violet-500"
+                    weekly1wPct > 80 ? "bg-fuchsia-500" : weekly1wPct > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
                   style={{
-                    width: `${Math.min(100, rateLimits.window_1w_percent)}%`,
-                    minWidth: rateLimits.window_1w_percent > 0 ? "0.75rem" : undefined,
+                    width: `${Math.min(100, weekly1wPct)}%`,
+                    minWidth: weekly1wPct > 0 ? "0.75rem" : undefined,
                   }}
                 />
               </div>
-              <p className="mt-2 text-xs font-mono text-slate-400">{rateLimits.window_1w_percent.toFixed(0)}%</p>
+              <p className="mt-2 text-xs font-mono text-slate-400">{weekly1wPct.toFixed(0)}%</p>
             </div>
           )}
         </div>

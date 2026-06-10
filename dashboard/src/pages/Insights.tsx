@@ -8,6 +8,7 @@ import { EmptyState } from "../components/EmptyState";
 import { EmptyInsights } from "../components/illustrations/EmptyInsights";
 import { Spinner } from "../components/Spinner";
 import { fetchRateLimits, fetchTrends, fetchComparePeriods, type TrendsData, type ComparePeriodsData } from "../lib/api";
+import { accountWeeklyPct } from "../lib/rateLimits";
 import { daysAgo, today, formatTokens } from "../lib/dateUtils";
 import { calculateUsagePace } from "../lib/burnRate";
 import {
@@ -301,16 +302,27 @@ export function Insights() {
 
   const [trendDays, setTrendDays] = useState(30);
 
+  // Rate limits are account-shared, so aggregate across all machines rather than
+  // the active machine filter. 1w uses the min of per-machine latest readings
+  // (accountWeeklyPct, which drops pre-reset peaks); 5h takes the max so the
+  // warning stays conservative.
   const { data: rateLimitsArr } = useQuery({
-    queryKey: ["rate-limits", machineId, "1"],
-    queryFn: () => fetchRateLimits(machineId, "1") as Promise<Array<Record<string, unknown>>>,
+    queryKey: ["rate-limits", undefined, "50"],
+    queryFn: () => fetchRateLimits(undefined, "50") as Promise<Array<Record<string, unknown>>>,
   });
   const rateLimits = useMemo(() => {
     const arr = rateLimitsArr;
     if (!arr || arr.length === 0) return null;
+    const latest5h = new Map<string, number>();
+    for (const r of arr) {
+      const mid = r.machine_id as string | undefined;
+      const pct = r.window_5h_percent as number | null;
+      if (mid == null || pct == null) continue;
+      if (!latest5h.has(mid)) latest5h.set(mid, pct);
+    }
     return {
-      window_5h_percent: arr[0].window_5h_percent as number | undefined,
-      window_1w_percent: arr[0].window_1w_percent as number | undefined,
+      window_5h_percent: latest5h.size > 0 ? Math.max(...latest5h.values()) : undefined,
+      window_1w_percent: accountWeeklyPct(arr) ?? undefined,
     };
   }, [rateLimitsArr]);
 
