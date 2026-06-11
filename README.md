@@ -168,6 +168,8 @@ cc-telemetry setup
 
 ## Uninstall
 
+**Removing one machine from the fleet** — delete it on the dashboard (Settings → machines). Its agent self-decommissions on its own: after a few consecutive `401` syncs it removes its LaunchAgents (daemon + auto-upgrade) and goes silent, so you never need shell access to the machine. To revive a machine deleted by mistake: delete `~/.claude-telemetry/.decommissioned`, re-register, and re-run `bootstrap.sh`.
+
 To completely remove claude-telemetry from all services:
 
 **Step 1 — Remove agent (each PC)**
