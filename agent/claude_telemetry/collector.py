@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from .models import DailyUsage, SessionUsage, RateLimit, BlockUsage
@@ -241,6 +242,78 @@ def _read_statusline_rate_limit(
             "session_cost": (data.get("cost") or {}).get("total_cost_usd"),
         }
     return None
+
+
+def trim_statusline_log(
+    claude_dir: os.PathLike[str] | str | None = None,
+    keep_days: int = 8,
+) -> int | None:
+    """Bound ~/.claude/statusline.jsonl by age — statusline.sh only ever appends.
+
+    Consumers need recent history only: _read_statusline_rate_limit takes the
+    newest record, and ccost's fallback views need at most the current weekly
+    window, so keep_days=8 preserves both. Unparsable lines are dropped with
+    the old records.
+
+    Cheap when idle: only the first record is read, and the rewrite is skipped
+    until that record is more than a day past the cutoff — so a steady-state
+    file is rewritten about once a day, not on every sync. The rewrite is
+    atomic (os.replace); ticks appended between read and replace are lost,
+    which is fine — the next statusline tick re-supplies the live reading
+    within seconds.
+
+    Returns the number of dropped records, or None when nothing was done.
+    """
+    from pathlib import Path
+
+    base = Path(claude_dir) if claude_dir else (Path.home() / ".claude")
+    path = base / "statusline.jsonl"
+    if not path.exists():
+        return None
+    cutoff = time.time() - keep_days * 86400
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            first = f.readline()
+    except OSError:
+        return None
+    if not first.strip():
+        return None
+    try:
+        first_ts = json.loads(first).get("ts")
+        if isinstance(first_ts, (int, float)) and first_ts >= cutoff - 86400:
+            return None
+    except json.JSONDecodeError:
+        pass  # corrupt head — rewrite below drops it, restoring the cheap path
+
+    dropped = 0
+    tmp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=base, suffix=".jsonl", delete=False,
+        ) as tmp:
+            tmp_name = tmp.name
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        ts = json.loads(line).get("ts")
+                        keep = isinstance(ts, (int, float)) and ts >= cutoff
+                    except json.JSONDecodeError:
+                        keep = False
+                    if keep:
+                        tmp.write(line if line.endswith("\n") else line + "\n")
+                    else:
+                        dropped += 1
+        os.replace(tmp_name, path)
+    except OSError:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        return None
+    return dropped
 
 
 def collect_rate_limits(

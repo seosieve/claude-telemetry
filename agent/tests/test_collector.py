@@ -10,6 +10,7 @@ from claude_telemetry.collector import (
     collect_daily_usage,
     collect_session_usage,
     collect_rate_limits,
+    trim_statusline_log,
     _detect_subagent,
     _session_id_to_project,
     CollectorError,
@@ -229,3 +230,40 @@ class TestHelpers:
     def test_session_id_to_project_projects_dir(self) -> None:
         result = _session_id_to_project("C--Users-RyanS-Projects-my-app")
         assert result == "my-app"
+
+
+class TestTrimStatuslineLog:
+    def _write(self, path: Path, ts_list: list[float], garbage: bool = False) -> None:
+        lines = [json.dumps({"ts": ts, "data": {"n": i}}) for i, ts in enumerate(ts_list)]
+        if garbage:
+            lines.insert(1, "not json {{{")
+        (path / "statusline.jsonl").write_text("\n".join(lines) + "\n")
+
+    def test_skips_fresh_file(self, tmp_path: Path) -> None:
+        import time
+        now = time.time()
+        self._write(tmp_path, [now - 3600, now])
+
+        assert trim_statusline_log(tmp_path) is None
+        assert len((tmp_path / "statusline.jsonl").read_text().splitlines()) == 2
+
+    def test_drops_old_and_garbage_keeps_recent(self, tmp_path: Path) -> None:
+        import time
+        now = time.time()
+        old = now - 20 * 86400
+        self._write(tmp_path, [old, old + 60, now - 3600, now], garbage=True)
+
+        dropped = trim_statusline_log(tmp_path, keep_days=8)
+        assert dropped == 3  # two old records + one garbage line
+
+        kept = (tmp_path / "statusline.jsonl").read_text().splitlines()
+        assert len(kept) == 2
+        assert all(json.loads(line)["ts"] >= now - 8 * 86400 for line in kept)
+
+        # After the rewrite the head is fresh, so the next call is a no-op.
+        assert trim_statusline_log(tmp_path, keep_days=8) is None
+
+    def test_missing_or_empty_file(self, tmp_path: Path) -> None:
+        assert trim_statusline_log(tmp_path) is None  # no file
+        (tmp_path / "statusline.jsonl").write_text("")
+        assert trim_statusline_log(tmp_path) is None  # empty file

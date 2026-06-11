@@ -55,6 +55,7 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
         collect_session_usage,
         collect_blocks_usage,
         collect_rate_limits,
+        trim_statusline_log,
     )
     from .sync import sync_daily_usage, sync_sessions, sync_blocks, sync_rate_limits
 
@@ -83,6 +84,14 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
     if blocks:
         r = sync_blocks(blocks, api_key)
         results["blocks"] = r.records_upserted
+
+    # Keep the statusline feed bounded (statusline.sh only ever appends).
+    try:
+        dropped = trim_statusline_log(config.get("claude_data_dir"))
+        if dropped:
+            logger.info("statusline.jsonl: dropped %d old records", dropped)
+    except Exception as e:
+        logger.warning("statusline trim failed: %s", e)
 
     # Rate limits (ccost) — keeps the 5h percent and reset countdown fresh
     rate_limits = collect_rate_limits(

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import CONFIG_DIR, load_config
-from .collector import collect_daily_usage, collect_session_usage, collect_rate_limits, collect_blocks_usage
+from .collector import collect_daily_usage, collect_session_usage, collect_rate_limits, collect_blocks_usage, trim_statusline_log
 from .extras import read_stats_cache
 from .logging_config import get_rotating_handler, LOG_FMT
 
@@ -66,6 +66,14 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]
     if r.errors:
         for err in r.errors:
             logger.warning("sessions error: %s", err)
+
+    # Keep the statusline feed bounded (statusline.sh only ever appends).
+    try:
+        dropped = trim_statusline_log(config.get("claude_data_dir"))
+        if dropped:
+            logger.info("statusline.jsonl: dropped %d old records", dropped)
+    except Exception as e:
+        logger.warning("statusline trim failed: %s", e)
 
     # Rate limits (optional). Capture weekly_reset_at so the daemon can wake
     # right after the weekly window rolls over (see run_daemon).
