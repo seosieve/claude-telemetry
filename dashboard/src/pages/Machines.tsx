@@ -22,7 +22,7 @@ import {
 
 import { MACHINE_COLORS } from "../lib/colors";
 
-const MACHINE_ORDER = ["P성민", "K성민", "충원", "대성"];
+const MACHINE_ORDER = ["K성민", "충원", "대성"];
 
 function sortByOrder<T extends { machine_name: string }>(arr: T[]): T[] {
   return [...arr].sort((a, b) => {

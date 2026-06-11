@@ -15,10 +15,14 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
   const sql = db(context.env);
 
+  // Deactivated machines (e.g. a member who moved to another Claude account)
+  // must not feed the account-level aggregation (accountWeeklyPct), so join
+  // their rows out instead of relying on the machines list alone.
   const text =
-    "select * from rate_limits" +
-    (validMachineId ? " where machine_id = $1" : "") +
-    " order by timestamp desc" +
+    "select rl.* from rate_limits rl" +
+    " join machines m on m.id = rl.machine_id and m.is_active = true" +
+    (validMachineId ? " where rl.machine_id = $1" : "") +
+    " order by rl.timestamp desc" +
     (validMachineId ? " limit $2" : " limit $1");
 
   const params = validMachineId ? [validMachineId, limit] : [limit];

@@ -2,7 +2,6 @@
 // 명도 단계로 우선순위/규모를 표현, hue는 indigo → violet 사이에서만 이동.
 
 export const MACHINE_COLORS = [
-  "#c7d2fe", // P성민 — indigo-200
   "#a78bfa", // K성민 — violet-400
   "#7c3aed", // 충원 — violet-600
   "#4c1d95", // 대성 — violet-900
