@@ -81,3 +81,6 @@ class SyncResult:
     errors: list[str] = field(default_factory=list)
     duration_ms: int = 0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # True when the ingest endpoint rejected our api_key (HTTP 401) — i.e. this
+    # machine was deleted/deactivated on the dashboard, not a transient failure.
+    auth_failed: bool = False

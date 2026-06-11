@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .config import CONFIG_DIR, load_config
+from .config import CONFIG_DIR, DECOMMISSION_FLAG, load_config
 from .logging_config import get_rotating_handler
 
 LOCK_FILE = CONFIG_DIR / ".hook_lock"
@@ -111,6 +111,11 @@ def _run_hook_sync(config: dict[str, Any], logger: logging.Logger) -> None:
 
 
 def main() -> None:
+    # Machine was removed from the fleet (see daemon._self_decommission) —
+    # stay silent instead of 401-knocking on every Claude Code session end.
+    if DECOMMISSION_FLAG.exists():
+        return
+
     logger = _setup_logging()
 
     if not _should_sync():

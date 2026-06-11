@@ -13,6 +13,11 @@ from typing import Any
 CONFIG_DIR = Path.home() / ".claude-telemetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+# Written by the daemon when the ingest endpoint has rejected this machine's
+# api_key for several consecutive cycles (= removed from the fleet). Both sync
+# paths stay silent while it exists; delete it (and re-register) to revive.
+DECOMMISSION_FLAG = CONFIG_DIR / ".decommissioned"
+
 # Agents POST telemetry to the dashboard's ingest endpoint instead of writing to
 # the database directly. Hardcoded here (not in config.json) so swapping the DB
 # never requires touching each PC's config — auth is the machines.api_key that

@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import signal
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import CONFIG_DIR, load_config
+from .config import CONFIG_DIR, DECOMMISSION_FLAG, load_config
 from .collector import collect_daily_usage, collect_session_usage, collect_rate_limits, collect_blocks_usage, trim_statusline_log
 from .extras import read_stats_cache
 from .logging_config import get_rotating_handler, LOG_FMT
 
 logger = logging.getLogger("claude-telemetry-daemon")
+
+# Consecutive all-401 cycles before the daemon decommissions itself. 401 is a
+# deliberate server answer ("this machine is not in the fleet"), never a
+# transient fault, so a small threshold only guards against a mistaken delete
+# being reverted within a couple of hours.
+AUTH_FAIL_LIMIT = 3
+AUTH_FAIL_COUNT_FILE = CONFIG_DIR / ".auth_fail_count"
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -34,16 +44,19 @@ def _setup_logging(verbose: bool = False) -> None:
         logger.addHandler(stream_handler)
 
 
-def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]:
+def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None, bool]:
     """Run one full sync cycle.
 
-    Returns ({source: records_upserted}, weekly_reset_at|None). The weekly reset
-    timestamp lets the daemon wake right after the weekly window rolls over.
+    Returns ({source: records_upserted}, weekly_reset_at|None, auth_failed).
+    The weekly reset timestamp lets the daemon wake right after the weekly
+    window rolls over; auth_failed is True when the ingest endpoint rejected
+    our api_key (machine removed from the fleet — see run_daemon).
     """
     from .sync import sync_daily_usage, sync_sessions, sync_rate_limits, sync_stats_extra, sync_blocks
 
     api_key = config["api_key"]
     results: dict[str, int] = {}
+    auth_failed = False
     # Machine registration / last_sync_at are handled server-side by the ingest
     # endpoint (resolved from api_key), so no DB write here.
 
@@ -55,6 +68,7 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]
     daily = collect_daily_usage(since=since)
     r = sync_daily_usage(daily, api_key)
     results["daily_usage"] = r.records_upserted
+    auth_failed = auth_failed or r.auth_failed
     if r.errors:
         for err in r.errors:
             logger.warning("daily_usage error: %s", err)
@@ -63,6 +77,7 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]
     sessions = collect_session_usage()
     r = sync_sessions(sessions, api_key)
     results["sessions"] = r.records_upserted
+    auth_failed = auth_failed or r.auth_failed
     if r.errors:
         for err in r.errors:
             logger.warning("sessions error: %s", err)
@@ -86,6 +101,7 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]
         if rate_data:
             r = sync_rate_limits(rate_data, api_key)
             results["rate_limits"] = r.records_upserted
+            auth_failed = auth_failed or r.auth_failed
             weekly_reset_at = rate_data[0].weekly_reset_at
 
     # Stats extra
@@ -94,14 +110,16 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None]
     if stats:
         r = sync_stats_extra(stats, api_key)
         results["stats_extra"] = r.records_upserted
+        auth_failed = auth_failed or r.auth_failed
 
     # Blocks
     blocks = collect_blocks_usage()
     if blocks:
         r = sync_blocks(blocks, api_key)
         results["blocks"] = r.records_upserted
+        auth_failed = auth_failed or r.auth_failed
 
-    return results, weekly_reset_at
+    return results, weekly_reset_at, auth_failed
 
 
 def _seconds_until_reset(weekly_reset_at: str | None, buffer: float = 90.0) -> float | None:
@@ -123,9 +141,73 @@ def _seconds_until_reset(weekly_reset_at: str | None, buffer: float = 90.0) -> f
     return (reset_dt - datetime.now(timezone.utc)).total_seconds() + buffer
 
 
+def _read_auth_fail_count() -> int:
+    try:
+        return int(AUTH_FAIL_COUNT_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_auth_fail_count(n: int) -> None:
+    try:
+        AUTH_FAIL_COUNT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_FAIL_COUNT_FILE.write_text(str(n))
+    except OSError:
+        pass
+
+
+def _self_decommission() -> None:
+    """Go permanently quiet: this machine was removed from the fleet.
+
+    The ingest endpoint rejected our api_key for AUTH_FAIL_LIMIT consecutive
+    cycles — a deliberate server answer (machine deleted/deactivated on the
+    dashboard), so retrying forever only knocks on a closed door. Writes the
+    decommission flag (silences hook_sync and any restarted daemon), then on
+    macOS removes both LaunchAgents: auto-upgrade first so tomorrow's run
+    can't reinstall us, our own job last — its bootout SIGTERMs this very
+    process, which is the intended exit.
+
+    Revival after a mistaken delete: re-register on the dashboard, delete the
+    flag, re-run bootstrap.sh (or cc-telemetry install).
+    """
+    try:
+        DECOMMISSION_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        DECOMMISSION_FLAG.write_text(
+            f"{datetime.now(timezone.utc).isoformat()} "
+            f"api_key rejected {AUTH_FAIL_LIMIT} cycles in a row\n"
+        )
+    except OSError:
+        pass
+    logger.warning(
+        "Machine removed from the fleet (%d consecutive 401s) — decommissioning.",
+        AUTH_FAIL_LIMIT,
+    )
+    if platform.system() != "Darwin":
+        return  # the flag alone silences both sync paths; service stays for manual cleanup
+
+    agents_dir = Path.home() / "Library/LaunchAgents"
+    uid = os.getuid()
+    for label in ("com.cc-telemetry.auto-upgrade", "com.cc-telemetry"):
+        try:
+            (agents_dir / f"{label}.plist").unlink(missing_ok=True)
+        except OSError:
+            pass
+        # Plist removed first so launchd can't respawn the job (KeepAlive).
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}/{label}"],
+            capture_output=True,
+        )
+
+
 def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
     """Main daemon loop with exponential backoff on failures."""
     _setup_logging(verbose)
+
+    if DECOMMISSION_FLAG.exists():
+        # Removed from the fleet earlier. Re-run the teardown (covers a respawn
+        # by a leftover KeepAlive job) and exit without touching the network.
+        _self_decommission()
+        return
 
     config = load_config()
     machine_name = config.get("machine_name", "unknown")
@@ -165,7 +247,7 @@ def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
             config = load_config()
             logger.info("Starting sync cycle...")
 
-            results, weekly_reset_at = _run_sync_cycle(config)
+            results, weekly_reset_at, auth_failed = _run_sync_cycle(config)
 
             total = sum(results.values())
             logger.info(
@@ -174,6 +256,22 @@ def run_daemon(interval_minutes: int = 15, verbose: bool = False) -> None:
                 ", ".join(f"{k}={v}" for k, v in results.items()),
             )
             consecutive_failures = 0
+
+            # Self-decommission on persistent 401s. Other failures (network,
+            # 5xx) raise above or land in r.errors without the auth flag, so
+            # they never advance this counter.
+            if auth_failed:
+                fails = _read_auth_fail_count() + 1
+                _write_auth_fail_count(fails)
+                logger.warning(
+                    "ingest rejected api_key (%d/%d consecutive cycles)",
+                    fails, AUTH_FAIL_LIMIT,
+                )
+                if fails >= AUTH_FAIL_LIMIT:
+                    _self_decommission()
+                    return
+            elif total > 0 and _read_auth_fail_count() != 0:
+                _write_auth_fail_count(0)
 
         except Exception as e:
             consecutive_failures += 1
