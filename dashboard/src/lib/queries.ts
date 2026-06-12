@@ -12,6 +12,7 @@ export interface UsageSummaryRow {
   opus_cost: number;
   sonnet_cost: number;
   haiku_cost: number;
+  fable_cost: number;
   machine_count: number;
 }
 
@@ -47,7 +48,9 @@ export async function getUsageSummary(
   endDate: string,
   machineId?: string,
 ): Promise<UsageSummaryRow[]> {
-  return fetchUsageSummary(startDate, endDate, machineId) as Promise<UsageSummaryRow[]>;
+  const rows = (await fetchUsageSummary(startDate, endDate, machineId)) as UsageSummaryRow[];
+  // DB 함수가 002-fable-cost 마이그레이션 이전이면 fable_cost가 없음 — NaN 전파 방지
+  return rows.map((r) => ({ ...r, fable_cost: r.fable_cost ?? 0 }));
 }
 
 export async function getProjectCosts(

@@ -165,6 +165,7 @@ CREATE OR REPLACE FUNCTION get_usage_summary(
 ) RETURNS TABLE(
     date DATE, total_cost NUMERIC, total_tokens BIGINT,
     opus_cost NUMERIC, sonnet_cost NUMERIC, haiku_cost NUMERIC,
+    fable_cost NUMERIC,
     machine_count BIGINT
 ) AS $$
 BEGIN
@@ -173,6 +174,8 @@ BEGIN
         SUM(CASE WHEN d.model LIKE '%opus%' THEN d.cost_usd ELSE 0 END)::NUMERIC,
         SUM(CASE WHEN d.model LIKE '%sonnet%' THEN d.cost_usd ELSE 0 END)::NUMERIC,
         SUM(CASE WHEN d.model LIKE '%haiku%' THEN d.cost_usd ELSE 0 END)::NUMERIC,
+        -- mythos는 fable과 동일 모델의 별도 id — 같은 버킷으로 집계
+        SUM(CASE WHEN d.model LIKE '%fable%' OR d.model LIKE '%mythos%' THEN d.cost_usd ELSE 0 END)::NUMERIC,
         COUNT(DISTINCT d.machine_id)::BIGINT
     FROM daily_usage d
     WHERE d.date BETWEEN p_start_date AND p_end_date

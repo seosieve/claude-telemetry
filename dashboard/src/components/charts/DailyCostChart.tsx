@@ -81,6 +81,13 @@ export function DailyCostChart({ data }: DailyCostChartProps) {
             iconSize={8}
           />
           <Bar
+            dataKey="fable_cost"
+            name="Fable"
+            stackId="cost"
+            fill={MODEL_COLORS.Fable}
+            radius={[0, 0, 0, 0]}
+          />
+          <Bar
             dataKey="opus_cost"
             name="Opus"
             stackId="cost"

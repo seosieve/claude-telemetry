@@ -21,10 +21,12 @@ export function Models() {
   const { summary, loading } = useUsageData(dateRange);
 
   const totalCost = summary.reduce((s, r) => s + r.total_cost, 0);
+  const fableCost = summary.reduce((s, r) => s + r.fable_cost, 0);
   const opusCost = summary.reduce((s, r) => s + r.opus_cost, 0);
   const sonnetCost = summary.reduce((s, r) => s + r.sonnet_cost, 0);
   const haikuCost = summary.reduce((s, r) => s + r.haiku_cost, 0);
 
+  const fablePct = totalCost > 0 ? (fableCost / totalCost) * 100 : 0;
   const opusPct = totalCost > 0 ? (opusCost / totalCost) * 100 : 0;
   const sonnetPct = totalCost > 0 ? (sonnetCost / totalCost) * 100 : 0;
   const haikuPct = totalCost > 0 ? (haikuCost / totalCost) * 100 : 0;
@@ -33,9 +35,10 @@ export function Models() {
   const mixData = useMemo(
     () =>
       summary.map((row) => {
-        const dayTotal = row.opus_cost + row.sonnet_cost + row.haiku_cost;
+        const dayTotal = row.fable_cost + row.opus_cost + row.sonnet_cost + row.haiku_cost;
         return {
           date: row.date,
+          fable: dayTotal > 0 ? (row.fable_cost / dayTotal) * 100 : 0,
           opus: dayTotal > 0 ? (row.opus_cost / dayTotal) * 100 : 0,
           sonnet: dayTotal > 0 ? (row.sonnet_cost / dayTotal) * 100 : 0,
           haiku: dayTotal > 0 ? (row.haiku_cost / dayTotal) * 100 : 0,
@@ -66,7 +69,14 @@ export function Models() {
       )}
 
       {/* Model metric cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
+        <div className={`rounded-xl border p-4 ${MODEL_CARD_CLASS.fable.border}`}>
+          <p className={`text-xs font-medium ${MODEL_CARD_CLASS.fable.text}`}>Fable</p>
+          <p className={`mt-1 font-mono text-2xl font-semibold ${MODEL_CARD_CLASS.fable.text}`}>
+            ${fableCost.toFixed(2)}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">{fablePct.toFixed(0)}% of total</p>
+        </div>
         <div className={`rounded-xl border p-4 ${MODEL_CARD_CLASS.opus.border}`}>
           <p className={`text-xs font-medium ${MODEL_CARD_CLASS.opus.text}`}>Opus</p>
           <p className={`mt-1 font-mono text-2xl font-semibold ${MODEL_CARD_CLASS.opus.text}`}>
@@ -133,6 +143,15 @@ export function Models() {
               }}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />
+            <Area
+              type="monotone"
+              dataKey="fable"
+              name="Fable"
+              stackId="1"
+              stroke={MODEL_COLORS.Fable}
+              fill={MODEL_COLORS.Fable}
+              fillOpacity={0.6}
+            />
             <Area
               type="monotone"
               dataKey="opus"

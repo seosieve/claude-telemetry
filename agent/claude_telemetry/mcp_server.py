@@ -62,7 +62,7 @@ def get_daily_usage(days: int = 7, machine_id: str | None = None) -> str:
     """Get daily token usage and costs across all machines.
 
     Returns per-day breakdown with total cost, tokens, and model-level costs
-    (Opus, Sonnet, Haiku). Useful for tracking spending trends.
+    (Fable, Opus, Sonnet, Haiku). Useful for tracking spending trends.
 
     Args:
         days: Number of days to look back (default 7)
@@ -83,13 +83,14 @@ def get_daily_usage(days: int = 7, machine_id: str | None = None) -> str:
     total_tokens = sum(int(r.get("total_tokens", 0) or 0) for r in rows)
 
     lines = [f"Daily usage — last {days} days (total: ${total_cost:,.2f}, {total_tokens:,} tokens)\n"]
-    lines.append(f"{'Date':<12} {'Cost':>10} {'Tokens':>14} {'Opus':>10} {'Sonnet':>10} {'Haiku':>10}")
-    lines.append("-" * 70)
+    lines.append(f"{'Date':<12} {'Cost':>10} {'Tokens':>14} {'Fable':>10} {'Opus':>10} {'Sonnet':>10} {'Haiku':>10}")
+    lines.append("-" * 81)
     for r in rows:
         lines.append(
             f"{r['date']:<12} "
             f"${float(r.get('total_cost', 0) or 0):>9,.2f} "
             f"{int(r.get('total_tokens', 0) or 0):>13,} "
+            f"${float(r.get('fable_cost', 0) or 0):>9,.2f} "
             f"${float(r.get('opus_cost', 0) or 0):>9,.2f} "
             f"${float(r.get('sonnet_cost', 0) or 0):>9,.2f} "
             f"${float(r.get('haiku_cost', 0) or 0):>9,.2f}"

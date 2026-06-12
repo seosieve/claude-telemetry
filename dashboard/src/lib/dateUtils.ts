@@ -50,6 +50,7 @@ export interface WeeklyData {
   opusCost: number;
   sonnetCost: number;
   haikuCost: number;
+  fableCost: number;
 }
 
 export function getISOWeekStart(dateStr: string, weekStartDay: string = "monday"): string {
@@ -77,6 +78,7 @@ export function groupByWeek(
     opus_cost: number;
     sonnet_cost: number;
     haiku_cost: number;
+    fable_cost: number;
   }>,
   weekStartDay: string = "monday",
 ): WeeklyData[] {
@@ -92,6 +94,7 @@ export function groupByWeek(
       existing.opusCost += row.opus_cost;
       existing.sonnetCost += row.sonnet_cost;
       existing.haikuCost += row.haiku_cost;
+      existing.fableCost += row.fable_cost;
     } else {
       weekMap.set(weekStart, {
         week: label,
@@ -101,6 +104,7 @@ export function groupByWeek(
         opusCost: row.opus_cost,
         sonnetCost: row.sonnet_cost,
         haikuCost: row.haiku_cost,
+        fableCost: row.fable_cost,
       });
     }
   }

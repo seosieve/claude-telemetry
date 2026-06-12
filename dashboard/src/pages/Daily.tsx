@@ -40,6 +40,7 @@ export function Daily() {
         opus_cost: 0,
         sonnet_cost: 0,
         haiku_cost: 0,
+        fable_cost: 0,
         machine_count: 0,
       })),
     [summary, dateRange],
@@ -151,6 +152,7 @@ export function Daily() {
                 formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />
+              <Area type="monotone" dataKey="fable_cost" name="Fable" stackId="1" stroke={MODEL_COLORS.Fable} fill={MODEL_COLORS.Fable} fillOpacity={0.4} />
               <Area type="monotone" dataKey="opus_cost" name="Opus" stackId="1" stroke={MODEL_COLORS.Opus} fill={MODEL_COLORS.Opus} fillOpacity={0.4} />
               <Area type="monotone" dataKey="sonnet_cost" name="Sonnet" stackId="1" stroke={MODEL_COLORS.Sonnet} fill={MODEL_COLORS.Sonnet} fillOpacity={0.4} />
               <Area type="monotone" dataKey="haiku_cost" name="Haiku" stackId="1" stroke={MODEL_COLORS.Haiku} fill={MODEL_COLORS.Haiku} fillOpacity={0.4} />
@@ -169,6 +171,7 @@ export function Daily() {
                 cursor={{ fill: "rgba(148,163,184,0.08)" }}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" iconSize={8} />
+              <Bar dataKey="fableCost" name="Fable" stackId="1" fill={MODEL_COLORS.Fable} />
               <Bar dataKey="opusCost" name="Opus" stackId="1" fill={MODEL_COLORS.Opus} />
               <Bar dataKey="sonnetCost" name="Sonnet" stackId="1" fill={MODEL_COLORS.Sonnet} />
               <Bar dataKey="haikuCost" name="Haiku" stackId="1" fill={MODEL_COLORS.Haiku} radius={[2, 2, 0, 0]} />

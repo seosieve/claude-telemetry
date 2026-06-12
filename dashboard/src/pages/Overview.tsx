@@ -143,8 +143,16 @@ export function Overview() {
   const topProject = projects.length > 0 ? projects[0].project : "—";
   const machineCount = machines.length;
 
-  const opusCost = summary.reduce((s, r) => s + r.opus_cost, 0);
-  const opusPct = totalCost > 0 ? ((opusCost / totalCost) * 100).toFixed(0) : "0";
+  // 비중이 가장 큰 모델 1개를 메트릭 카드로 노출 (Fable 등장 이후 Opus 고정 표기는 부정확)
+  const topModel = (
+    [
+      ["Fable", summary.reduce((s, r) => s + r.fable_cost, 0)],
+      ["Opus", summary.reduce((s, r) => s + r.opus_cost, 0)],
+      ["Sonnet", summary.reduce((s, r) => s + r.sonnet_cost, 0)],
+      ["Haiku", summary.reduce((s, r) => s + r.haiku_cost, 0)],
+    ] as const
+  ).reduce((max, cur) => (cur[1] > max[1] ? cur : max));
+  const topModelPct = totalCost > 0 ? ((topModel[1] / totalCost) * 100).toFixed(0) : "0";
 
   const filledSummary = useMemo(
     () =>
@@ -155,6 +163,7 @@ export function Overview() {
         opus_cost: 0,
         sonnet_cost: 0,
         haiku_cost: 0,
+        fable_cost: 0,
         machine_count: 0,
       })),
     [summary, dateRange],
@@ -220,9 +229,9 @@ export function Overview() {
           sub={projects.length > 0 ? `$${projects[0].total_cost.toFixed(2)}` : ""}
         />
         <MetricCard
-          label="Opus %"
-          value={`${opusPct}%`}
-          sub={`$${opusCost.toFixed(2)}`}
+          label={`${topModel[0]} %`}
+          value={`${topModelPct}%`}
+          sub={`$${topModel[1].toFixed(2)}`}
         />
         {prefs.plan_cost != null && prefs.plan_cost > 0 && (() => {
           const apiEquiv = daysActive > 0 ? (totalCost / daysActive) * 30 : totalCost;

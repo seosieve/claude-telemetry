@@ -41,20 +41,22 @@ function CustomPieTooltip({
 export function ModelBreakdown({ data }: ModelBreakdownProps) {
   const totals = data.reduce(
     (acc, row) => ({
+      fable: acc.fable + row.fable_cost,
       opus: acc.opus + row.opus_cost,
       sonnet: acc.sonnet + row.sonnet_cost,
       haiku: acc.haiku + row.haiku_cost,
     }),
-    { opus: 0, sonnet: 0, haiku: 0 },
+    { fable: 0, opus: 0, sonnet: 0, haiku: 0 },
   );
 
   const pieData = [
+    { name: "Fable", value: totals.fable, color: COLORS.Fable },
     { name: "Opus", value: totals.opus, color: COLORS.Opus },
     { name: "Sonnet", value: totals.sonnet, color: COLORS.Sonnet },
     { name: "Haiku", value: totals.haiku, color: COLORS.Haiku },
   ].filter((d) => d.value > 0);
 
-  const total = totals.opus + totals.sonnet + totals.haiku;
+  const total = totals.fable + totals.opus + totals.sonnet + totals.haiku;
 
   return (
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
