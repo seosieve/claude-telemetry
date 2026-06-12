@@ -38,7 +38,7 @@ The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing
 - **Project budget tracker** with alerts at 90%/100%
 - **Weekly usage reports** with daily/weekly toggle
 - Cross-machine usage pace comparison
-- Model mix analysis (Opus/Sonnet/Haiku breakdown)
+- Model mix analysis (Fable/Opus/Sonnet/Haiku breakdown)
 - Cloudflare Pages Functions proxy — the DB connection string stays server-side, zero secrets in the browser bundle
 - Deploy page with copy-paste agent install commands
 - Statusline auto-setup for rate limit tracking
@@ -116,7 +116,7 @@ cc-telemetry setup
 | **Daily** | Stacked area chart with daily/weekly toggle, top 10 days, hour heatmap |
 | **Blocks** | 5-hour block timeline, active block card, burn rate, multi-PC table |
 | **Projects** | Cost by project, pie distribution, budget progress bars, full table |
-| **Models** | Opus/Sonnet/Haiku breakdown, mix over time, savings alert |
+| **Models** | Fable/Opus/Sonnet/Haiku breakdown, mix over time, savings alert |
 | **Machines** | Per-machine cards, comparison chart, daily pace, status badges |
 | **Deploy** | Generate agent install commands with one-click copy, statusline setup |
 | **Sessions** | Paginated table with sorting, filters by machine/project/type |
