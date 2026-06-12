@@ -7,10 +7,11 @@ export const MACHINE_COLORS = [
   "#4c1d95", // 대성 — violet-900
 ] as const;
 
-// 모델 비용 차트(스택드): 기존 violet 명도 단계는 유지하되, 주력인 Fable만
-// cyan 악센트로 분리 — violet끼리는 인접 단계가 스택바에서 구분이 안 됐음.
+// 모델 비용 차트(스택드): violet 명도 단계로 티어 표현.
+// Fable은 가장 진한 violet-900 (MACHINE_COLORS의 대성과 동일 톤) —
+// Opus(500)와 4단계 차이라 스택바에서도 구분됨. 인접 단계(600 vs 500)는 구분 불가했음.
 export const MODEL_COLORS = {
-  Fable: "#22d3ee", // cyan-400
+  Fable: "#4c1d95", // violet-900
   Opus: "#8b5cf6", // violet-500
   Sonnet: "#a78bfa", // violet-400
   Haiku: "#c7d2fe", // indigo-200
