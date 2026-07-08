@@ -20,10 +20,47 @@ export interface Env {
   CRON_SECRET?: string;
 }
 
+// Neon scale-to-zero: after ~5 min idle the compute suspends. The first query
+// landing during a cold start can fail with a transient connection/wake error,
+// which otherwise bubbles up as a Worker exception (HTTP 500 → "Failed to load
+// data"). These errors happen at connect/wake time — before the statement runs —
+// so retrying a couple of times is safe even for writes, and makes the wake-up
+// invisible to the dashboard. Genuine SQL errors (constraint, syntax, bad args)
+// don't match this pattern and surface immediately without wasted retries.
+const TRANSIENT =
+  /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN)\b|connect|connection|timed? ?out|terminat|starting up|not yet|could ?n[o']?t reach|unavailable|fetch failed|network|bad gateway|service unavailable|\b(?:502|503|504|429)\b/i;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withRetry<T>(run: () => Promise<T>, tries = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt >= tries || !TRANSIENT.test(msg)) throw err;
+      await sleep(250 * attempt); // 250ms, then 500ms — well within cold-start wake time
+    }
+  }
+}
+
 // Returns a tagged-template SQL function: await sql`select ... ${val}`.
 // For dynamic SQL use sql.query(text, params) with $1, $2, ... placeholders.
+// Both call styles retry transient cold-start failures (see withRetry above).
+// Note: this returns plain Promises instead of Neon's lazy NeonQueryPromise, so
+// results must be awaited (all call sites do) — sql.transaction() is unsupported.
 export function db(env: Env): NeonQueryFunction<false, false> {
-  return neon(env.DATABASE_URL);
+  const sql = neon(env.DATABASE_URL);
+
+  const wrapped = (strings: TemplateStringsArray, ...values: unknown[]) =>
+    withRetry(() => sql(strings, ...values));
+  wrapped.query = (text: string, params?: unknown[]) =>
+    withRetry(() => sql.query(text, params));
+  wrapped.transaction = () => {
+    throw new Error("sql.transaction() is not supported by the retrying db() wrapper");
+  };
+
+  return wrapped as unknown as NeonQueryFunction<false, false>;
 }
 
 export function json(data: unknown, status = 200): Response {
