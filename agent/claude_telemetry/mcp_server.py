@@ -111,8 +111,9 @@ def get_weekly_usage(weeks: int = 4, machine_id: str | None = None) -> str:
     """
     rows = _api_get("/api/weekly-estimate", {"machine_id": machine_id}) or []
 
-    # Limit to requested weeks
-    rows = rows[:weeks]
+    # The API returns weeks oldest-first, so take the most recent N from the
+    # tail (not the head, which would return the oldest weeks).
+    rows = rows[-weeks:]
 
     if not rows:
         return "No weekly usage data available."
