@@ -217,7 +217,10 @@ BEGIN
         COUNT(DISTINCT d.date)::INTEGER
     FROM daily_usage d
     WHERE (p_machine_id IS NULL OR d.machine_id = p_machine_id)
-    GROUP BY date_trunc('week', d.date) ORDER BY week_start DESC;
+    -- ORDER BY 1 (output column position), not "week_start": the latter
+    -- collides with the RETURNS TABLE OUT param and silently sorts by a NULL
+    -- variable instead of the week, leaving rows unordered.
+    GROUP BY date_trunc('week', d.date) ORDER BY 1 DESC;
 END; $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION get_machine_summary(
