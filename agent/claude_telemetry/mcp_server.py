@@ -111,9 +111,10 @@ def get_weekly_usage(weeks: int = 4, machine_id: str | None = None) -> str:
     """
     rows = _api_get("/api/weekly-estimate", {"machine_id": machine_id}) or []
 
-    # The API returns weeks oldest-first, so take the most recent N from the
-    # tail (not the head, which would return the oldest weeks).
-    rows = rows[-weeks:]
+    # The weekly endpoint's row order has drifted between the SQL schema
+    # (ORDER BY week_start DESC) and what's actually deployed (ASC), so don't
+    # trust it — sort by week_start ourselves and keep the most recent N weeks.
+    rows = sorted(rows, key=lambda r: r.get("week_start") or "")[-weeks:]
 
     if not rows:
         return "No weekly usage data available."
