@@ -200,7 +200,10 @@ BEGIN
     FROM daily_usage d
     WHERE d.date BETWEEN p_start_date AND p_end_date
         AND (p_machine_id IS NULL OR d.machine_id = p_machine_id)
-    GROUP BY d.project ORDER BY total_cost DESC;
+    -- ORDER BY 2 (total_cost's output position), not "total_cost": the bare
+    -- name collides with the RETURNS TABLE OUT param and silently sorts by a
+    -- NULL variable, so the "top N by cost" ranking was actually alphabetical.
+    GROUP BY d.project ORDER BY 2 DESC;
 END; $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION get_weekly_rate_estimate(
@@ -240,5 +243,7 @@ BEGIN
     FROM machines m
     LEFT JOIN daily_usage d ON d.machine_id = m.id AND d.date BETWEEN p_start_date AND p_end_date
     WHERE m.is_active = true
-    GROUP BY m.id, m.name ORDER BY total_cost DESC;
+    -- ORDER BY 3 (total_cost's output position); see get_project_costs above —
+    -- the bare "total_cost" collides with the OUT param and sorts by NULL.
+    GROUP BY m.id, m.name ORDER BY 3 DESC;
 END; $$ LANGUAGE plpgsql SECURITY DEFINER;
