@@ -13,8 +13,20 @@ import { useUsageData } from "../hooks/useUsageData";
 import { usePreferences } from "../hooks/usePreferences";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { fetchRateLimits, fetchMachines } from "../lib/api";
-import { accountWeeklyPct } from "../lib/rateLimits";
+import { accountWeeklyPct, accountModelLimit } from "../lib/rateLimits";
 import { rangeToDate, formatTokens, fillDateGaps } from "../lib/dateUtils";
+
+function kstResetLabel(ms: number): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(new Date(ms));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `Resets ${get("weekday")} ${get("hour")}:${get("minute")} ${get("dayPeriod")} KST`;
+}
 
 export function Overview() {
   const [range, setRange] = useState("30d");
@@ -86,6 +98,13 @@ export function Overview() {
     [rateLimitsWeekly],
   );
 
+  // Fable's own weekly gauge (the 50%-of-weekly cap) — model_limits JSONB from
+  // the OAuth usage API; null until an agent that reports it has synced.
+  const fableLimit = useMemo(
+    () => accountModelLimit(rateLimitsWeekly, "fable"),
+    [rateLimitsWeekly],
+  );
+
   // When the weekly window is about to roll over, refetch rate limits a few
   // minutes after the reset so the bar updates without waiting for the 5-min
   // poll. The daemon re-syncs ~90s past the reset; we wait longer (3 min) so
@@ -118,23 +137,15 @@ export function Overview() {
     return `Resets in ${m}m`;
   }, [resetAtMs, now]);
 
-  const weeklyResetLabel = useMemo(() => {
-    if (weeklyResetAtMs == null) return null;
-    const d = new Date(weeklyResetAtMs);
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Seoul",
-      weekday: "short",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    }).formatToParts(d);
-    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-    const weekday = get("weekday");
-    const h12 = get("hour");
-    const m = get("minute");
-    const ampm = get("dayPeriod");
-    return `Resets ${weekday} ${h12}:${m} ${ampm} KST`;
-  }, [weeklyResetAtMs]);
+  const weeklyResetLabel = useMemo(
+    () => (weeklyResetAtMs == null ? null : kstResetLabel(weeklyResetAtMs)),
+    [weeklyResetAtMs],
+  );
+
+  const fableResetLabel = useMemo(() => {
+    const ms = fableLimit?.resetsAtMs ?? weeklyResetAtMs;
+    return ms == null ? null : kstResetLabel(ms);
+  }, [fableLimit, weeklyResetAtMs]);
 
   const totalCost = summary.reduce((s, r) => s + r.total_cost, 0);
   const totalTokens = summary.reduce((s, r) => s + r.total_tokens, 0);
@@ -249,9 +260,9 @@ export function Overview() {
         })()}
       </div>
 
-      {/* Rate limit bars */}
-      {((rateLimits && rateLimits.window_5h_percent != null) || weekly1wPct != null) && (
-        <div className="grid grid-cols-2 gap-4">
+      {/* Rate limit bars — 3-up when the Fable gauge is reporting, 2-up otherwise */}
+      {((rateLimits && rateLimits.window_5h_percent != null) || weekly1wPct != null || fableLimit != null) && (
+        <div className={`grid gap-4 ${fableLimit != null ? "grid-cols-3" : "grid-cols-2"}`}>
           {rateLimits && rateLimits.window_5h_percent != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
@@ -290,6 +301,26 @@ export function Overview() {
                 />
               </div>
               <p className="mt-2 text-xs font-mono text-slate-400">{weekly1wPct.toFixed(0)}%</p>
+            </div>
+          )}
+          {fableLimit != null && (
+            <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+              <div className="flex items-baseline justify-between mb-2">
+                <p className="text-xs font-medium text-slate-400">Fable (1w)</p>
+                {fableResetLabel && <p className="text-xs text-slate-500">{fableResetLabel}</p>}
+              </div>
+              <div className="h-3 rounded-full bg-white/[0.04]">
+                <div
+                  className={`h-3 rounded-full transition-all ${
+                    fableLimit.pct > 80 ? "bg-fuchsia-500" : fableLimit.pct > 50 ? "bg-amber-500" : "bg-violet-500"
+                  }`}
+                  style={{
+                    width: `${Math.min(100, fableLimit.pct)}%`,
+                    minWidth: fableLimit.pct > 0 ? "0.75rem" : undefined,
+                  }}
+                />
+              </div>
+              <p className="mt-2 text-xs font-mono text-slate-400">{fableLimit.pct.toFixed(0)}%</p>
             </div>
           )}
         </div>

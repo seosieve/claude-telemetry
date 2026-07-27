@@ -61,7 +61,7 @@ CREATE TABLE sessions (
     UNIQUE(machine_id, session_id)
 );
 
--- ── rate_limits (includes 006 weekly_reset_at) ──────────────────────────────
+-- ── rate_limits (includes 006 weekly_reset_at, 003 model_limits) ────────────
 CREATE TABLE rate_limits (
     id BIGSERIAL PRIMARY KEY,
     machine_id UUID NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
@@ -71,6 +71,8 @@ CREATE TABLE rate_limits (
     session_cost_usd NUMERIC(10, 4),
     session_duration_seconds INTEGER,
     weekly_reset_at TIMESTAMPTZ,
+    -- OAuth usage API의 모델별 주간 게이지 (예: {"fable": {"pct": 9, "resets_at": "..."}})
+    model_limits JSONB,
     UNIQUE(machine_id, timestamp)
 );
 
