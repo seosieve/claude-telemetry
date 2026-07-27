@@ -240,6 +240,7 @@ def _read_statusline_rate_limit(
             "five_hour_reset": five_hour.get("resets_at"),
             "seven_day_reset": seven_day.get("resets_at"),
             "session_cost": (data.get("cost") or {}).get("total_cost_usd"),
+            "record_ts": rec.get("ts"),
         }
     return None
 
@@ -468,6 +469,18 @@ def collect_rate_limits(
 
     sl = _read_statusline_rate_limit(claude_dir)
     if sl is not None:
+        # Stamp the row with the statusline record's own time, not the sync
+        # time. A daemon re-sync on an idle machine would otherwise launder an
+        # hours-old reading into a "fresh" row, letting it outrank genuinely
+        # newer readings from other machines on the dashboard (which picks the
+        # freshest in-window reading). Repeat syncs of the same reading hit
+        # UNIQUE(machine_id, timestamp) and become an upsert that still
+        # refreshes model_limits (the OAuth values are live at sync time).
+        reading = now
+        try:
+            reading = datetime.fromtimestamp(sl.get("record_ts"), timezone.utc)
+        except (ValueError, TypeError, OSError):
+            pass
         weekly_reset_at: str | None = None
         if sl["seven_day_reset"]:
             try:
@@ -483,12 +496,12 @@ def collect_rate_limits(
         if sl["five_hour_reset"]:
             try:
                 duration_seconds = int(
-                    5 * 3600 - (sl["five_hour_reset"] - now.timestamp())
+                    5 * 3600 - (sl["five_hour_reset"] - reading.timestamp())
                 )
             except (ValueError, TypeError):
                 pass
         return [RateLimit(
-            timestamp=now.isoformat(),
+            timestamp=reading.isoformat(),
             window_5h_percent=sl["five_hour_pct"],
             window_1w_percent=sl["seven_day_pct"],
             session_cost_usd=sl["session_cost"],

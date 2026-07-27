@@ -1,6 +1,7 @@
 """Tests for the collector module."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -115,6 +116,16 @@ class TestCollectSessionUsage:
 
 
 class TestCollectRateLimits:
+    @pytest.fixture(autouse=True)
+    def _no_oauth_fetch(self):
+        # collect_rate_limits best-effort-fetches the OAuth usage API for
+        # model_limits; never let tests hit the Keychain/network for it.
+        with patch(
+            "claude_telemetry.collector._fetch_oauth_model_limits",
+            return_value=None,
+        ):
+            yield
+
     @patch("claude_telemetry.collector._read_statusline_rate_limit", return_value=None)
     @patch("claude_telemetry.collector._run_command")
     def test_returns_none_when_not_installed(self, mock_run: MagicMock, _mock_sl: MagicMock) -> None:
@@ -202,6 +213,7 @@ class TestCollectRateLimits:
             "five_hour_reset": 1781086200,
             "seven_day_reset": 1781406000,
             "session_cost": 1.25,
+            "record_ts": 1781080000,
         }
 
         result = collect_rate_limits()
@@ -210,6 +222,50 @@ class TestCollectRateLimits:
         assert result[0].window_1w_percent == 16
         assert result[0].session_cost_usd == 1.25
         assert result[0].weekly_reset_at is not None
+
+    @patch("claude_telemetry.collector._read_statusline_rate_limit")
+    def test_statusline_row_stamped_with_reading_time(self, mock_sl: MagicMock) -> None:
+        # The row must carry the statusline record's own time, not the sync
+        # time — otherwise an idle machine's daemon re-sync launders an old
+        # reading into a "fresh" row that outranks genuinely newer readings
+        # from other machines (the off-cycle-reset bug, dashboard-side).
+        mock_sl.return_value = {
+            "five_hour_pct": 66,
+            "seven_day_pct": 16,
+            "five_hour_reset": 1781086200,
+            "seven_day_reset": 1781406000,
+            "session_cost": 1.25,
+            "record_ts": 1781080000,
+        }
+
+        result = collect_rate_limits()
+        assert result is not None
+        ts = datetime.fromisoformat(result[0].timestamp)
+        assert ts.timestamp() == 1781080000
+        # The 5h countdown reconstructs the real reset from the same stamp:
+        # timestamp + 5h - duration == five_hour_reset.
+        assert (
+            ts.timestamp() + 5 * 3600 - result[0].session_duration_seconds
+            == 1781086200
+        )
+
+    @patch("claude_telemetry.collector._read_statusline_rate_limit")
+    def test_statusline_missing_record_ts_falls_back_to_now(self, mock_sl: MagicMock) -> None:
+        mock_sl.return_value = {
+            "five_hour_pct": 66,
+            "seven_day_pct": 16,
+            "five_hour_reset": None,
+            "seven_day_reset": None,
+            "session_cost": None,
+            "record_ts": None,
+        }
+
+        before = datetime.now(timezone.utc)
+        result = collect_rate_limits()
+        after = datetime.now(timezone.utc)
+        assert result is not None
+        ts = datetime.fromisoformat(result[0].timestamp)
+        assert before <= ts <= after
 
 
 class TestHelpers:

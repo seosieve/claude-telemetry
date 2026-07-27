@@ -13,7 +13,7 @@ import { useUsageData } from "../hooks/useUsageData";
 import { usePreferences } from "../hooks/usePreferences";
 import { useMachineFilter } from "../hooks/useMachineFilter";
 import { fetchRateLimits, fetchMachines } from "../lib/api";
-import { accountWeeklyPct, accountModelLimit } from "../lib/rateLimits";
+import { accountWeeklyPct, accountModelLimit, accountSessionPct } from "../lib/rateLimits";
 import { rangeToDate, formatTokens, fillDateGaps } from "../lib/dateUtils";
 
 function kstResetLabel(ms: number): string {
@@ -55,27 +55,8 @@ export function Overview() {
     queryFn: () => fetchRateLimits(machineId, "10") as Promise<Array<Record<string, unknown>>>,
     refetchInterval: 300_000,
   });
-  const { rateLimits, resetAtMs } = useMemo(() => {
-    if (!rateLimitsRecent) return { rateLimits: null, resetAtMs: null };
-    const nowMs = Date.now();
-    const row = rateLimitsRecent.find((r) => {
-      const ts = r.timestamp as string | undefined;
-      return ts ? new Date(ts).getTime() <= nowMs : false;
-    });
-    if (!row) return { rateLimits: null, resetAtMs: null };
-    const ts = row.timestamp as string | undefined;
-    const dur = row.session_duration_seconds as number | undefined;
-    const reset = ts && typeof dur === "number"
-      ? new Date(ts).getTime() + (5 * 3600 - dur) * 1000
-      : null;
-    return {
-      rateLimits: {
-        window_5h_percent: row.window_5h_percent as number | undefined,
-        window_1w_percent: row.window_1w_percent as number | undefined,
-      },
-      resetAtMs: reset,
-    };
-  }, [rateLimitsRecent]);
+  const session5h = useMemo(() => accountSessionPct(rateLimitsRecent), [rateLimitsRecent]);
+  const resetAtMs = session5h?.resetsAtMs ?? null;
 
   const { data: rateLimitsWeekly } = useQuery({
     queryKey: ["rate-limits", undefined, "50"],
@@ -89,10 +70,9 @@ export function Overview() {
     return weeklyAt ? new Date(weeklyAt).getTime() : null;
   }, [rateLimitsWeekly]);
 
-  // Account-wide weekly %: aggregate the latest reading per machine rather than
-  // trusting whichever single row synced most recently. Machines report the
-  // shared weekly limit independently, so a pre-reset peak on one machine would
-  // otherwise flicker against a post-reset value on another (see accountWeeklyPct).
+  // Account-wide weekly %: the freshest in-window reading across machines —
+  // rows are live values stamped with their reading time, so newest wins
+  // (reset-safety rationale in accountWeeklyPct).
   const weekly1wPct = useMemo(
     () => accountWeeklyPct(rateLimitsWeekly),
     [rateLimitsWeekly],
@@ -261,9 +241,9 @@ export function Overview() {
       </div>
 
       {/* Rate limit bars — 3-up when the Fable gauge is reporting, 2-up otherwise */}
-      {((rateLimits && rateLimits.window_5h_percent != null) || weekly1wPct != null || fableLimit != null) && (
+      {(session5h != null || weekly1wPct != null || fableLimit != null) && (
         <div className={`grid gap-4 ${fableLimit != null ? "grid-cols-3" : "grid-cols-2"}`}>
-          {rateLimits && rateLimits.window_5h_percent != null && (
+          {session5h != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
                 <p className="text-xs font-medium text-slate-400">Current Session (5h)</p>
@@ -272,15 +252,15 @@ export function Overview() {
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
                   className={`h-3 rounded-full transition-all ${
-                    rateLimits.window_5h_percent > 80 ? "bg-fuchsia-500" : rateLimits.window_5h_percent > 50 ? "bg-amber-500" : "bg-violet-500"
+                    session5h.pct > 80 ? "bg-fuchsia-500" : session5h.pct > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
                   style={{
-                    width: `${Math.min(100, rateLimits.window_5h_percent)}%`,
-                    minWidth: rateLimits.window_5h_percent > 0 ? "0.75rem" : undefined,
+                    width: `${Math.min(100, session5h.pct)}%`,
+                    minWidth: session5h.pct > 0 ? "0.75rem" : undefined,
                   }}
                 />
               </div>
-              <p className="mt-2 text-xs font-mono text-slate-400">{rateLimits.window_5h_percent.toFixed(0)}%</p>
+              <p className="mt-2 text-xs font-mono text-slate-400">{session5h.pct.toFixed(0)}%</p>
             </div>
           )}
           {weekly1wPct != null && (
