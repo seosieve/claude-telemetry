@@ -7,6 +7,15 @@
     @apply bg-slate-950 text-slate-200 font-sans;
   }
 
+  /* Gauge bars grow from 0 to their inline width on mount (the `to` state of
+     a keyframe defaults to the element's own style). Subsequent value changes
+     are still handled by transition-all, so this only plays on first paint. */
+  @keyframes bar-grow {
+    from {
+      width: 0;
+    }
+  }
+
   select {
     background-color: rgb(30 41 59);
     color: white;

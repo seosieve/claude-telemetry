@@ -251,7 +251,7 @@ export function Overview() {
               </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
-                  className={`h-3 rounded-full transition-all ${
+                  className={`h-3 rounded-full transition-all animate-[bar-grow_600ms_ease-out] ${
                     session5h.pct > 80 ? "bg-fuchsia-500" : session5h.pct > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
                   style={{
@@ -271,7 +271,7 @@ export function Overview() {
               </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
-                  className={`h-3 rounded-full transition-all ${
+                  className={`h-3 rounded-full transition-all animate-[bar-grow_600ms_ease-out] ${
                     weekly1wPct > 80 ? "bg-fuchsia-500" : weekly1wPct > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
                   style={{
@@ -291,7 +291,7 @@ export function Overview() {
               </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
-                  className={`h-3 rounded-full transition-all ${
+                  className={`h-3 rounded-full transition-all animate-[bar-grow_600ms_ease-out] ${
                     fableLimit.pct > 80 ? "bg-fuchsia-500" : fableLimit.pct > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
                   style={{
