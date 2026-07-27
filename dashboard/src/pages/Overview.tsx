@@ -266,7 +266,7 @@ export function Overview() {
           {rateLimits && rateLimits.window_5h_percent != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
-                <p className="text-xs font-medium text-slate-400">Rate Limit (5h)</p>
+                <p className="text-xs font-medium text-slate-400">Current session (5h)</p>
                 {resetLabel && <p className="text-xs text-slate-500">{resetLabel}</p>}
               </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
@@ -286,7 +286,7 @@ export function Overview() {
           {weekly1wPct != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
-                <p className="text-xs font-medium text-slate-400">Rate Limit (1w)</p>
+                <p className="text-xs font-medium text-slate-400">Current week (all models)</p>
                 {weeklyResetLabel && <p className="text-xs text-slate-500">{weeklyResetLabel}</p>}
               </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
@@ -306,7 +306,7 @@ export function Overview() {
           {fableLimit != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
-                <p className="text-xs font-medium text-slate-400">Fable (1w)</p>
+                <p className="text-xs font-medium text-slate-400">Current week (Fable)</p>
                 {fableResetLabel && <p className="text-xs text-slate-500">{fableResetLabel}</p>}
               </div>
               <div className="h-3 rounded-full bg-white/[0.04]">
