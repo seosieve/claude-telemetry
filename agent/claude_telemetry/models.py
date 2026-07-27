@@ -43,6 +43,9 @@ class RateLimit:
     session_cost_usd: float | None = None
     session_duration_seconds: int | None = None
     weekly_reset_at: str | None = None
+    # Model-scoped weekly gauges from the OAuth usage API, keyed by lowercased
+    # display name — e.g. {"fable": {"pct": 9, "resets_at": "..."}}.
+    model_limits: dict | None = None
 
 
 @dataclass

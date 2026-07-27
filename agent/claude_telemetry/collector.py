@@ -244,6 +244,130 @@ def _read_statusline_rate_limit(
     return None
 
 
+_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_OAUTH_CACHE_TTL = 900  # weekly gauges move slowly — refetch after 15 min
+_OAUTH_RETRY_INTERVAL = 300  # after a failed attempt, back off for 5 min
+
+
+def _read_oauth_token() -> str | None:
+    """Read Claude Code's OAuth access token (Keychain on macOS, file elsewhere).
+
+    Claude Code keeps the token refreshed as it runs; we only ever read it. A
+    missing or expired token is not an error — the caller just skips this cycle.
+    """
+    raw: str | None = None
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", "-w", "-s", "Claude Code-credentials"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                raw = result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if raw is None:
+        from pathlib import Path
+
+        try:
+            raw = (Path.home() / ".claude" / ".credentials.json").read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            return None
+    try:
+        return (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
+def _fetch_oauth_model_limits(
+    claude_dir: os.PathLike[str] | str | None = None,
+) -> dict | None:
+    """Per-model weekly gauges (e.g. Fable's 50% cap) from the OAuth usage API.
+
+    The statusline payload only carries the account-wide five_hour/seven_day
+    buckets; model-scoped gauges exist only in the `limits[]` array of
+    api.anthropic.com/api/oauth/usage as kind="weekly_scoped" entries. That
+    endpoint rate-limits aggressively (429 with no Retry-After), so readings
+    are cached in <claude_dir>/.cc-telemetry-model-limits.json with a 15-min
+    TTL and a 5-min backoff after any failed attempt. Serving a stale reading
+    is fine — these are weekly gauges.
+
+    Returns e.g. {"fable": {"pct": 9, "resets_at": "2026-08-02T03:00:00+00:00"}},
+    or None when the account has no scoped limits or nothing could be read.
+    """
+    from pathlib import Path
+
+    base = Path(claude_dir) if claude_dir else (Path.home() / ".claude")
+    cache_path = base / ".cc-telemetry-model-limits.json"
+    cache: dict = {}
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    cached_limits = cache.get("model_limits")
+    now = time.time()
+
+    fetched_at = cache.get("fetched_at")
+    if isinstance(fetched_at, (int, float)) and now - fetched_at < _OAUTH_CACHE_TTL:
+        return cached_limits
+    attempted_at = cache.get("attempted_at")
+    if (
+        isinstance(attempted_at, (int, float))
+        and now - attempted_at < _OAUTH_RETRY_INTERVAL
+    ):
+        return cached_limits
+
+    def _save(updates: dict) -> None:
+        cache.update(updates)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(cache), encoding="utf-8")
+        except OSError:
+            pass
+
+    token = _read_oauth_token()
+    if not token:
+        _save({"attempted_at": now})
+        return cached_limits
+
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        _OAUTH_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": "oauth-2025-04-20",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
+        _save({"attempted_at": now})
+        return cached_limits
+
+    scoped: dict = {}
+    for entry in data.get("limits") or []:
+        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
+            continue
+        model = ((entry.get("scope") or {}).get("model")) or {}
+        name = model.get("display_name")
+        if not name or entry.get("percent") is None:
+            continue
+        scoped[str(name).lower()] = {
+            "pct": entry.get("percent"),
+            "resets_at": entry.get("resets_at"),
+        }
+    result = scoped or None
+    _save({"fetched_at": now, "attempted_at": now, "model_limits": result})
+    return result
+
+
 def trim_statusline_log(
     claude_dir: os.PathLike[str] | str | None = None,
     keep_days: int = 8,
@@ -337,6 +461,11 @@ def collect_rate_limits(
     """
     now = datetime.now(timezone.utc)
 
+    # Model-scoped weekly gauges (Fable 50% cap etc.) only exist on the OAuth
+    # usage API — neither statusline nor ccost carries them. Best-effort:
+    # None simply leaves the column empty.
+    model_limits = _fetch_oauth_model_limits(claude_dir)
+
     sl = _read_statusline_rate_limit(claude_dir)
     if sl is not None:
         weekly_reset_at: str | None = None
@@ -365,6 +494,7 @@ def collect_rate_limits(
             session_cost_usd=sl["session_cost"],
             session_duration_seconds=duration_seconds,
             weekly_reset_at=weekly_reset_at,
+            model_limits=model_limits,
         )]
 
     try:
@@ -471,6 +601,7 @@ def collect_rate_limits(
         session_cost_usd=active.get("totalCost"),
         session_duration_seconds=duration_seconds,
         weekly_reset_at=weekly_reset_at,
+        model_limits=model_limits,
     )]
 
 
