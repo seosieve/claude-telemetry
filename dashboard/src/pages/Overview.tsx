@@ -11,7 +11,6 @@ import { MonthlyCostChart } from "../components/charts/MonthlyCostChart";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { useUsageData } from "../hooks/useUsageData";
 import { usePreferences } from "../hooks/usePreferences";
-import { useMachineFilter } from "../hooks/useMachineFilter";
 import { fetchRateLimits, fetchMachines } from "../lib/api";
 import { accountWeeklyPct, accountModelLimit, accountSessionPct } from "../lib/rateLimits";
 import { rangeToDate, formatTokens, fillDateGaps } from "../lib/dateUtils";
@@ -33,7 +32,6 @@ export function Overview() {
   const dateRange = useMemo(() => rangeToDate(range), [range]);
   const { summary, projects, machines, loading, error } = useUsageData(dateRange, { polling: true });
   const { prefs } = usePreferences();
-  const { machineId } = useMachineFilter();
 
   const [now, setNow] = useState(() => Date.now());
 
@@ -50,39 +48,40 @@ export function Overview() {
     return map;
   }, [machinesRaw]);
 
-  const { data: rateLimitsRecent } = useQuery({
-    queryKey: ["rate-limits", machineId, "10"],
-    queryFn: () => fetchRateLimits(machineId, "10") as Promise<Array<Record<string, unknown>>>,
-    refetchInterval: 300_000,
-  });
-  const session5h = useMemo(() => accountSessionPct(rateLimitsRecent), [rateLimitsRecent]);
-  const resetAtMs = session5h?.resetsAtMs ?? null;
-
-  const { data: rateLimitsWeekly } = useQuery({
+  // Every rate-limit gauge below is ACCOUNT-wide: 5h, weekly and the Fable cap
+  // are one shared pool, so all machines report identical numbers and the
+  // machine filter must not narrow this query. Filtering it used to hide the 5h
+  // card entirely whenever a machine that doesn't report rate limits was
+  // selected — a machine-shaped question asked of an account-shaped value.
+  const { data: rateLimitRows } = useQuery({
     queryKey: ["rate-limits", undefined, "50"],
     queryFn: () => fetchRateLimits(undefined, "50") as Promise<Array<Record<string, unknown>>>,
     refetchInterval: 300_000,
   });
+
+  const session5h = useMemo(() => accountSessionPct(rateLimitRows), [rateLimitRows]);
+  const resetAtMs = session5h?.resetsAtMs ?? null;
+
   const weeklyResetAtMs = useMemo(() => {
-    if (!rateLimitsWeekly) return null;
-    const row = rateLimitsWeekly.find((r) => r.weekly_reset_at);
+    if (!rateLimitRows) return null;
+    const row = rateLimitRows.find((r) => r.weekly_reset_at);
     const weeklyAt = row?.weekly_reset_at as string | undefined;
     return weeklyAt ? new Date(weeklyAt).getTime() : null;
-  }, [rateLimitsWeekly]);
+  }, [rateLimitRows]);
 
   // Account-wide weekly %: the freshest in-window reading across machines —
   // rows are live values stamped with their reading time, so newest wins
   // (reset-safety rationale in accountWeeklyPct).
   const weekly1wPct = useMemo(
-    () => accountWeeklyPct(rateLimitsWeekly),
-    [rateLimitsWeekly],
+    () => accountWeeklyPct(rateLimitRows),
+    [rateLimitRows],
   );
 
   // Fable's own weekly gauge (the 50%-of-weekly cap) — model_limits JSONB from
   // the OAuth usage API; null until an agent that reports it has synced.
   const fableLimit = useMemo(
-    () => accountModelLimit(rateLimitsWeekly, "fable"),
-    [rateLimitsWeekly],
+    () => accountModelLimit(rateLimitRows, "fable"),
+    [rateLimitRows],
   );
 
   // When the weekly window is about to roll over, refetch rate limits a few
@@ -126,6 +125,10 @@ export function Overview() {
     const ms = fableLimit?.resetsAtMs ?? weeklyResetAtMs;
     return ms == null ? null : kstResetLabel(ms);
   }, [fableLimit, weeklyResetAtMs]);
+
+  // Grid width follows how many gauges actually report — a fixed 3-up would
+  // stretch two cards across three columns when one source is missing.
+  const rateLimitCards = [session5h, weekly1wPct, fableLimit].filter((v) => v != null).length;
 
   const totalCost = summary.reduce((s, r) => s + r.total_cost, 0);
   const totalTokens = summary.reduce((s, r) => s + r.total_tokens, 0);
@@ -240,9 +243,9 @@ export function Overview() {
         })()}
       </div>
 
-      {/* Rate limit bars — 3-up when the Fable gauge is reporting, 2-up otherwise */}
-      {(session5h != null || weekly1wPct != null || fableLimit != null) && (
-        <div className={`grid gap-4 ${fableLimit != null ? "grid-cols-3" : "grid-cols-2"}`}>
+      {/* Rate limit bars — one column per reporting gauge */}
+      {rateLimitCards > 0 && (
+        <div className={`grid gap-4 ${rateLimitCards >= 3 ? "grid-cols-3" : rateLimitCards === 2 ? "grid-cols-2" : "grid-cols-1"}`}>
           {session5h != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">

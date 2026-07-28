@@ -25,9 +25,14 @@
 //     aggregation ship together.)
 //
 // CAVEAT: freshest-across-all assumes every reporting machine shares one
-// account pool (true today: 충원 + K성민). If a machine on a *different*
-// account joins the fleet, group rows by their weekly_reset_at anchor first
-// and aggregate per group — otherwise the pools mix.
+// account pool. True today — all three machines (충원 / K성민 / 대성) are on the
+// same account, which is also why 대성 reporting no rate limits costs us
+// nothing: its numbers would be identical to the other two. If a machine on a
+// *different* account joins the fleet, group rows by their weekly_reset_at
+// anchor first and aggregate per group — otherwise the pools mix.
+//
+// Corollary for callers: these values are account-scoped, so never fetch them
+// through a machine filter. See Overview.tsx's single un-filtered query.
 
 interface ModelLimitEntry {
   pct?: number | null;
@@ -45,11 +50,20 @@ interface RateLimitRow {
 }
 
 /**
- * Account-wide 5h session gauge: the newest reading whose 5h session hasn't
- * reset yet. session_duration_seconds encodes the reset time
- * (timestamp + 5h - duration); a reading from an already-reset session is
- * dropped — its % predates the reset that zeroed it. Readings without a
- * duration can't be checked and are kept (resetsAtMs null).
+ * Account-wide 5h session gauge: the freshest usable reading.
+ * session_duration_seconds encodes the reset time (timestamp + 5h - duration).
+ *
+ * A reading whose session has already reset does NOT carry the current usage —
+ * its % predates the reset that zeroed it — but the reset itself is
+ * information: usage is 0, not unknown. So report 0 with no countdown (the new
+ * session's window isn't known until a fresh reading lands) rather than null,
+ * which would make the card vanish for the gap between the reset and the next
+ * sync. Older rows are not consulted in that case: rows are newest-first and a
+ * shared account pool resets for every machine at once, so anything behind a
+ * reset reading is equally stale.
+ *
+ * Readings without a duration can't be checked and are taken at face value
+ * (resetsAtMs null). Returns null only when no reading exists at all.
  */
 export function accountSessionPct(
   rows: Array<Record<string, unknown>> | RateLimitRow[] | undefined,
@@ -65,7 +79,7 @@ export function accountSessionPct(
     if (tsMs > now) continue;
     const dur = r.session_duration_seconds;
     const resetsAtMs = typeof dur === "number" ? tsMs + (5 * 3600 - dur) * 1000 : null;
-    if (resetsAtMs != null && resetsAtMs <= now) continue;
+    if (resetsAtMs != null && resetsAtMs <= now) return { pct: 0, resetsAtMs: null };
     return { pct, resetsAtMs };
   }
   return null;
