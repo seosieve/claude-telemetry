@@ -85,20 +85,43 @@ async function checkAlerts(sql: Sql, user: UserRow): Promise<Alert[]> {
 
   // 2. Rate limits at 90%+
   if (types.rate_limit !== false) {
+    // The newest row holds a reading, not a live value: if its window has since
+    // reset, the % it carries predates the reset that zeroed it. Alerting on
+    // that fires a phantom "95%" every day until the next reading lands — and
+    // readings only land while someone is using Claude Code, so an overnight
+    // reset leaves a stale high row sitting at the top for hours. Drop a
+    // window's % once its own reset time has passed (same rule as the
+    // dashboard's accountSessionPct / accountWeeklyPct).
     const rows = (await sql`
-      select window_5h_percent, window_1w_percent
+      select window_5h_percent, window_1w_percent,
+             session_duration_seconds, weekly_reset_at, timestamp
       from rate_limits
       order by timestamp desc
       limit 1
     `) as Array<{
       window_5h_percent: number | null;
       window_1w_percent: number | null;
+      session_duration_seconds: number | null;
+      weekly_reset_at: string | Date | null;
+      timestamp: string | Date;
     }>;
 
     if (rows.length > 0) {
       const r = rows[0];
-      const w5h = r.window_5h_percent != null ? Number(r.window_5h_percent) : null;
-      const w1w = r.window_1w_percent != null ? Number(r.window_1w_percent) : null;
+      const now = Date.now();
+      const ms = (v: string | Date) => (v instanceof Date ? v.getTime() : new Date(v).getTime());
+
+      // 5h reset is encoded as timestamp + 5h - session_duration_seconds.
+      const dur = r.session_duration_seconds;
+      const fiveHourResetMs =
+        dur != null ? ms(r.timestamp) + (5 * 3600 - Number(dur)) * 1000 : null;
+      const sessionLive = fiveHourResetMs == null || fiveHourResetMs > now;
+      const weeklyLive = r.weekly_reset_at == null || ms(r.weekly_reset_at) > now;
+
+      const w5h =
+        sessionLive && r.window_5h_percent != null ? Number(r.window_5h_percent) : null;
+      const w1w =
+        weeklyLive && r.window_1w_percent != null ? Number(r.window_1w_percent) : null;
       if (w5h != null && w5h > 90) {
         alerts.push({
           type: "rate_limit_5h",
