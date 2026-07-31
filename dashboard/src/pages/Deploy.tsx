@@ -26,28 +26,59 @@ interface CommandStep {
 
 function getCommands(os: OS, machineName: string): CommandStep[] {
   const isWin = os === "windows";
+  const isMac = os === "macos";
   // setup registers the machine via the dashboard (which hands back its own
   // api_key) — no database keys ever live on the machine.
   const setupCmd = `cc-telemetry setup --non-interactive --name "${machineName}"`;
+  // The rice-gang fork bakes this dashboard's ingest URL into the agent, so
+  // machines must install from the fork — never the upstream PyPI package.
+  const forkUrl =
+    "git+https://github.com/seosieve/claude-telemetry@main#subdirectory=agent";
+  const py = isWin ? "python" : "python3";
+
+  const prereqCode = isMac
+    ? ["brew install pipx", "npm install -g ccusage ccost"]
+    : [
+        "npm install -g ccusage ccost",
+        `${py} -m pip install --user pipx`,
+        `${py} -m pipx ensurepath`,
+      ];
+
+  const installStep: CommandStep = isMac
+    ? {
+        step: "2",
+        label: "Install agent (rice-gang fork)",
+        code: "curl -fsSL https://raw.githubusercontent.com/seosieve/claude-telemetry/main/bootstrap.sh | sh",
+        warning:
+          "Also registers a daily 05:10 auto-upgrade LaunchAgent. The backfill sync at the end fails before setup — that's expected; Step 4 covers it.",
+      }
+    : {
+        step: "2",
+        label: "Install agent (rice-gang fork)",
+        code: `pipx install --force "${forkUrl}"`,
+        warning:
+          "bootstrap.sh auto-upgrade is macOS-only — re-run this command whenever the agent needs updating.",
+      };
 
   return [
     {
       step: "1",
-      label: "Install",
-      code: ["npm install -g ccusage ccost", "pip install cc-telemetry"].join("\n"),
+      label: "Install prerequisites",
+      code: prereqCode.join("\n"),
       warning: "Requires Node.js 18+ and Python 3.11+.",
     },
+    installStep,
     {
-      step: "2",
+      step: "3",
       label: "Run setup wizard",
       code: setupCmd,
       warning:
         "Registers this machine with the dashboard (it receives its own api_key automatically) and configures hooks, MCP server, statusline, and daemon. No database keys needed on the machine.",
     },
     {
-      step: "3",
-      label: "Verify",
-      code: "cc-telemetry doctor",
+      step: "4",
+      label: "Backfill & verify",
+      code: ["cc-telemetry sync --force", "cc-telemetry doctor"].join("\n"),
       warning: isWin
         ? "Run PowerShell as Administrator if the service check fails."
         : undefined,
