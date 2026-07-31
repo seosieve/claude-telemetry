@@ -22,33 +22,18 @@ import {
 
 import { MACHINE_COLORS } from "../lib/colors";
 
-const MACHINE_ORDER = ["K성민", "충원", "대성"];
-
-function sortByOrder<T extends { machine_name: string }>(arr: T[]): T[] {
-  return [...arr].sort((a, b) => {
-    const ai = MACHINE_ORDER.indexOf(a.machine_name);
-    const bi = MACHINE_ORDER.indexOf(b.machine_name);
-    if (ai === -1 && bi === -1) return a.machine_name.localeCompare(b.machine_name);
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
-    return ai - bi;
-  });
-}
-
 function MachineSummaryTooltip({
   active,
   payload,
+  colorOf,
 }: {
   active?: boolean;
   payload?: Array<{ payload: { machine_name: string; total_cost: number } }>;
+  colorOf?: (name: string) => string;
 }) {
   if (!active || !payload?.length) return null;
   const row = payload[0].payload;
-  const orderIndex = MACHINE_ORDER.indexOf(row.machine_name);
-  const color =
-    orderIndex >= 0
-      ? MACHINE_COLORS[orderIndex % MACHINE_COLORS.length]
-      : MACHINE_COLORS[0];
+  const color = colorOf?.(row.machine_name) ?? MACHINE_COLORS[0];
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl">
       <div className="flex items-center gap-2 text-xs">
@@ -121,7 +106,34 @@ export function Machines() {
   );
   const dateRange = useMemo(() => rangeToDate(range), [range]);
   const { machines: rawMachines, loading } = useUsageData(dateRange, { polling: true });
-  const machines = useMemo(() => sortByOrder(rawMachines), [rawMachines]);
+
+  const { data: machinesRaw } = useQuery({
+    queryKey: ["machines", { active_only: false }],
+    queryFn: () =>
+      fetchMachines(false) as Promise<
+        Array<{ id: string; created_at: string; last_sync_at: string | null }>
+      >,
+    refetchInterval: 300_000,
+  });
+
+  // 등록(created_at) 순 정렬 — 스택 순서·범례·색 인덱스가 전부 이 순서를 따르므로
+  // 새 멤버는 손대지 않아도 맨 뒤(가장 밝은 색)로 들어온다.
+  const machines = useMemo(() => {
+    const createdAt = new Map((machinesRaw ?? []).map((r) => [r.id, r.created_at] as const));
+    return [...rawMachines].sort((a, b) => {
+      const ca = createdAt.get(a.machine_id) ?? "";
+      const cb = createdAt.get(b.machine_id) ?? "";
+      return ca !== cb ? ca.localeCompare(cb) : a.machine_name.localeCompare(b.machine_name);
+    });
+  }, [rawMachines, machinesRaw]);
+
+  const colorOf = useCallback(
+    (name: string) => {
+      const i = machines.findIndex((m) => m.machine_name === name);
+      return MACHINE_COLORS[(i >= 0 ? i : 0) % MACHINE_COLORS.length];
+    },
+    [machines],
+  );
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [, setRefresh] = useState(0);
   const [soloMachine, setSoloMachine] = useState<string | null>(null);
@@ -145,11 +157,6 @@ export function Machines() {
     });
   }, []);
 
-  const { data: machinesRaw } = useQuery({
-    queryKey: ["machines", { active_only: false }],
-    queryFn: () => fetchMachines(false) as Promise<Array<{ id: string; last_sync_at: string | null }>>,
-    refetchInterval: 300_000,
-  });
   const syncMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const r of machinesRaw ?? []) {
@@ -268,7 +275,7 @@ export function Machines() {
                 width={120}
               />
               <Tooltip
-                content={<MachineSummaryTooltip />}
+                content={<MachineSummaryTooltip colorOf={colorOf} />}
                 cursor={{ fill: "rgba(148,163,184,0.08)" }}
               />
               <Bar
@@ -337,15 +344,16 @@ export function Machines() {
                   </span>
                 )}
               />
-              {[...machines].reverse().map((m) => {
-                const originalIndex = machines.findIndex((x) => x.machine_id === m.machine_id);
+              {/* 등록순 그대로 렌더 — 첫 Bar가 스택 바닥이라, 바닥→위와 범례
+                  왼→오른쪽이 똑같이 등록순(진한→밝은)으로 읽힌다. */}
+              {machines.map((m, i) => {
                 return (
                   <Bar
                     key={m.machine_id}
                     dataKey={m.machine_name}
                     name={m.machine_name}
                     stackId="cost"
-                    fill={MACHINE_COLORS[originalIndex % MACHINE_COLORS.length]}
+                    fill={MACHINE_COLORS[i % MACHINE_COLORS.length]}
                     isAnimationActive={true}
                     animationDuration={160}
                     shape={(props: object) => {
@@ -373,7 +381,7 @@ export function Machines() {
                         (mm) => mm.machine_name === ownName,
                       );
                       const aboveCost = machines
-                        .slice(0, selfIdx)
+                        .slice(selfIdx + 1)
                         .reduce(
                           (s, mm) => s + Number(p.payload?.[mm.machine_name] || 0),
                           0,

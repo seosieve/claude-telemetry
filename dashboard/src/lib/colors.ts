@@ -1,14 +1,19 @@
 // 차트 팔레트 — Tailwind indigo/violet 패밀리로 통일.
 // 명도 단계로 우선순위/규모를 표현, hue는 indigo → violet 사이에서만 이동.
 
+// 머신 색은 등록(created_at) 순서 = 인덱스: 오래된 멤버일수록 진하고, 새 멤버는
+// 자동으로 다음 밝은 단계를 받는다 (Machines 페이지가 등록순으로 정렬해 집음).
+// 한 hue 명도 램프의 한계로 4단계 전부 채도를 지킬 수는 없어서, 인접쌍 구분성
+// (CVD·normal ΔE ≥ 16)을 우선해 밝은 끝은 indigo-200 — Haiku와 같은 톤.
 export const MACHINE_COLORS = [
-  "#a78bfa", // K성민 — violet-400
-  "#7c3aed", // 충원 — violet-600
-  "#4c1d95", // 대성 — violet-900
+  "#4c1d95", // violet-900
+  "#7c3aed", // violet-600
+  "#a78bfa", // violet-400
+  "#c7d2fe", // indigo-200
 ] as const;
 
 // 모델 비용 차트(스택드): violet 명도 단계로 티어 표현.
-// Fable은 가장 진한 violet-900 (MACHINE_COLORS의 대성과 동일 톤) —
+// Fable은 가장 진한 violet-900 (MACHINE_COLORS의 첫 단계와 동일 톤) —
 // Opus(500)와 4단계 차이라 스택바에서도 구분됨. 인접 단계(600 vs 500)는 구분 불가했음.
 export const MODEL_COLORS = {
   Fable: "#4c1d95", // violet-900
