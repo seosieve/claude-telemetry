@@ -330,6 +330,13 @@ export function Machines() {
                 wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
                 iconType="circle"
                 iconSize={8}
+                // 범례는 스택 위→아래(밝은→진한) 순으로 — 막대와 같은 방향으로 읽힌다.
+                payload={[...machines].reverse().map((m) => ({
+                  value: m.machine_name,
+                  type: "circle" as const,
+                  id: m.machine_id,
+                  color: colorOf(m.machine_name),
+                }))}
                 onClick={(o: { value?: string }) => {
                   if (!o.value) return;
                   handleLegendToggle(o.value);
