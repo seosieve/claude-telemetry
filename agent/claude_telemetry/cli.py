@@ -164,14 +164,19 @@ def setup(
     click.echo(f"  Node.js: {node_ver}")
 
     # --- Step 2: Check/install ccusage ---
-    if not shutil.which("ccusage") and not shutil.which("npx"):
-        pass  # npx will handle it
-    ccusage_check = subprocess.run(
-        ["npx", "ccusage@latest", "--version"], capture_output=True, text=True, timeout=30,
-    )
-    if ccusage_check.returncode == 0:
-        click.echo(f"  ccusage: {ccusage_check.stdout.strip() or 'available via npx'}")
-    else:
+    # Pre-warm the npx cache with the exact version the collector pins, so the
+    # first sync never blocks on a download. On a cold cache npx asks
+    # "Ok to proceed?" — with output captured the prompt is invisible and the
+    # call hangs — so pass -y, give the download room, and treat any failure
+    # as non-fatal (this check is informational; sync retries on its own).
+    try:
+        ccusage_check = subprocess.run(
+            ["npx", "-y", "ccusage@19.0.3", "--version"],
+            capture_output=True, text=True, timeout=120,
+        )
+        ccusage_ver = ccusage_check.stdout.strip() if ccusage_check.returncode == 0 else ""
+        click.echo(f"  ccusage: {ccusage_ver or 'available via npx'}")
+    except (subprocess.TimeoutExpired, OSError):
         click.echo("  ccusage: available via npx (will download on first use)")
 
     # --- Step 3: Check/install ccost ---

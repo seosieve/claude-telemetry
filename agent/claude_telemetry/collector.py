@@ -73,7 +73,7 @@ def collect_daily_usage(since: str | None = None) -> list[DailyUsage]:
     # ccusage v2 split the top-level commands into per-agent subcommands; the
     # old `ccusage daily --instances` now returns a flat list without
     # project/model breakdowns, so we must call the `claude daily` subcommand.
-    cmd = ["npx", "ccusage@19.0.3", "claude", "daily", "--json", "--instances", "--no-color"]
+    cmd = ["npx", "-y", "ccusage@19.0.3", "claude", "daily", "--json", "--instances", "--no-color"]
     if since:
         cmd.extend(["--since", since])
 
@@ -109,7 +109,7 @@ def collect_daily_usage(since: str | None = None) -> list[DailyUsage]:
 
 def collect_session_usage() -> list[SessionUsage]:
     """Call `npx ccusage@19.0.3 claude session --json` and parse into SessionUsage records."""
-    cmd = ["npx", "ccusage@19.0.3", "claude", "session", "--json", "--no-color"]
+    cmd = ["npx", "-y", "ccusage@19.0.3", "claude", "session", "--json", "--no-color"]
     raw = _run_command(cmd)
     data = json.loads(raw)
 
@@ -620,7 +620,7 @@ def collect_rate_limits(
 
 def collect_blocks_usage() -> list[BlockUsage]:
     """Call `npx ccusage@19.0.3 claude blocks --json --recent` and parse into BlockUsage records."""
-    cmd = ["npx", "ccusage@19.0.3", "claude", "blocks", "--json", "--recent", "--no-color"]
+    cmd = ["npx", "-y", "ccusage@19.0.3", "claude", "blocks", "--json", "--recent", "--no-color"]
     try:
         raw = _run_command(cmd)
     except CollectorError:
