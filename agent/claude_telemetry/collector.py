@@ -33,6 +33,15 @@ def _run_command(cmd: list[str], timeout: int = 120) -> str:
     return result.stdout
 
 
+def _rows(data, key: str) -> list:
+    """ccusage returns {key: rows} normally; tolerate a bare top-level list."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get(key), list):
+        return data[key]
+    return []
+
+
 def _detect_subagent(session_id: str) -> bool:
     """Detect if session is a Paperclip subagent by path pattern."""
     return "paperclip-instances-default-" in session_id
@@ -81,12 +90,34 @@ def collect_daily_usage(since: str | None = None) -> list[DailyUsage]:
     data = json.loads(raw)
 
     results: list[DailyUsage] = []
-    projects = data.get("projects", {})
 
-    for project_id, days in projects.items():
-        project_name = _session_id_to_project(project_id)
+    # `claude daily --instances` normally returns {"projects": {id: [day…]}},
+    # but at least one machine got a flat form instead — {"daily": [day…]} or
+    # a bare top-level list with no project grouping. Accept every shape so a
+    # ccusage quirk on one machine can't kill its entire sync.
+    if isinstance(data, dict) and isinstance(data.get("projects"), dict):
+        grouped = data["projects"].items()
+    elif isinstance(data, dict):
+        grouped = [(None, data.get("daily", []))]
+    else:
+        grouped = [(None, data if isinstance(data, list) else [])]
+
+    for project_id, days in grouped:
+        project_name = _session_id_to_project(project_id) if project_id else "(unknown)"
         for day in days:
-            for breakdown in day.get("modelBreakdowns", []):
+            if not isinstance(day, dict) or "date" not in day:
+                continue
+            # Flat day records may lack modelBreakdowns — synthesize one from
+            # the day-level totals so the usage still lands in the dashboard.
+            breakdowns = day.get("modelBreakdowns") or [{
+                "modelName": ", ".join(day.get("modelsUsed", [])) or "unknown",
+                "inputTokens": day.get("inputTokens", 0),
+                "outputTokens": day.get("outputTokens", 0),
+                "cacheCreationTokens": day.get("cacheCreationTokens", 0),
+                "cacheReadTokens": day.get("cacheReadTokens", 0),
+                "cost": day.get("totalCost", 0.0),
+            }]
+            for breakdown in breakdowns:
                 results.append(DailyUsage(
                     date=day["date"],
                     project=project_name,
@@ -114,7 +145,9 @@ def collect_session_usage() -> list[SessionUsage]:
     data = json.loads(raw)
 
     results: list[SessionUsage] = []
-    for s in data.get("sessions", []):
+    for s in _rows(data, "sessions"):
+        if not isinstance(s, dict) or "sessionId" not in s:
+            continue
         session_id = s["sessionId"]
         results.append(SessionUsage(
             session_id=session_id,
@@ -632,7 +665,9 @@ def collect_blocks_usage() -> list[BlockUsage]:
         return []
 
     results: list[BlockUsage] = []
-    for b in data.get("blocks", []):
+    for b in _rows(data, "blocks"):
+        if not isinstance(b, dict):
+            continue
         tc = b.get("tokenCounts", {})
         start = b.get("startTime", "")
         end = b.get("endTime", "")
