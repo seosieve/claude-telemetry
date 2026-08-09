@@ -869,19 +869,36 @@ def doctor() -> None:
            f"rate-limit feed. Run: cc-telemetry setup-statusline"
            if statusline_cmd else "Run: cc-telemetry setup-statusline")
 
-    # 5b. The feed itself — what collect_rate_limits actually reads. Configured
-    # but empty is the normal state right after setup: the script only runs once
-    # Claude Code renders a statusline, so a restart is the fix.
+    # 5b. The feed itself — what collect_rate_limits actually reads. Two very
+    # different failures hide behind "no readings", so separate them: an absent
+    # or empty file means the statusline script never ran (restart Claude Code),
+    # while a file full of records that carry no rate_limits means Claude Code
+    # is running but isn't reporting usage at all — too old to send it, or an
+    # account/plan the API doesn't report for. Only the first is fixable here.
     from .collector import _read_statusline_rate_limit
+    claude_dir = Path(config.get("claude_data_dir") or (Path.home() / ".claude")) if config \
+        else Path.home() / ".claude"
+    feed_path = claude_dir / "statusline.jsonl"
     feed = _read_statusline_rate_limit(config.get("claude_data_dir") if config else None)
     if feed:
         five, week = feed.get("five_hour_pct"), feed.get("seven_day_pct")
-        detail = f"5h {five}% · weekly {week}%"
+        feed_detail, feed_hint = f"5h {five}% · weekly {week}%", ""
+    elif not feed_path.exists():
+        feed_detail = ""
+        feed_hint = (f"{feed_path} does not exist — the statusline script has never run. "
+                     "Restart Claude Code, start a session, then re-run doctor")
     else:
-        detail = ""
-    _check("Rate limit feed", feed is not None, detail,
-           "No readings in ~/.claude/statusline.jsonl — restart Claude Code and "
-           "start a session, then re-run doctor")
+        records = 0
+        try:
+            with feed_path.open(encoding="utf-8", errors="replace") as fh:
+                records = sum(1 for line in fh if line.strip())
+        except OSError:
+            pass
+        feed_detail = ""
+        feed_hint = (f"{records} statusline records, none carrying rate_limits — this "
+                     "Claude Code isn't reporting usage (check `claude --version`, and "
+                     "whether this machine is on a subscription plan)")
+    _check("Rate limit feed", feed is not None, feed_detail, feed_hint)
 
     # 6. Hooks
     hooks_ok = False

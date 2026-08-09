@@ -28,6 +28,7 @@ DAEMON_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.plist"
 UPGRADE_PLIST="$HOME/Library/LaunchAgents/com.cc-telemetry.auto-upgrade.plist"
 UPGRADE_LABEL="com.cc-telemetry.auto-upgrade"
 LOG_DIR="$HOME/.cc-telemetry"
+UPGRADE_SCRIPT="$LOG_DIR/auto-upgrade.sh"
 PIPX_BIN="$HOME/.local/bin/pipx"
 CC_BIN="$HOME/.local/bin/cc-telemetry"
 
@@ -67,6 +68,55 @@ else
 fi
 
 echo "[3/4] Installing auto-upgrade LaunchAgent..."
+
+# The upgrade body lives in its own script rather than inline in the plist: the
+# retry loop below would be unreadable once XML-escaped, and a real file can be
+# run by hand to reproduce a failed night.
+cat > "$UPGRADE_SCRIPT" <<UPGRADE
+#!/bin/sh
+# Installed by bootstrap.sh — re-run bootstrap.sh to update this file.
+set -u
+
+PIPX_BIN="${PIPX_BIN}"
+CC_BIN="${CC_BIN}"
+FORK_URL="${FORK_URL}"
+DAEMON_PLIST="${DAEMON_PLIST}"
+
+# 05:10 usually lands moments after the Mac wakes, before Wi-Fi reassociates,
+# so the first attempt often dies in DNS/TCP. Git has no timeout of its own
+# there: on 2026-08-09 one clone sat on a dead connection from 05:11 to 07:37
+# before the OS gave up. These two abort a stalled transfer in 30s, which is
+# also what makes the retry loop below reachable at all.
+GIT_HTTP_LOW_SPEED_LIMIT=1000
+GIT_HTTP_LOW_SPEED_TIME=30
+export GIT_HTTP_LOW_SPEED_LIMIT GIT_HTTP_LOW_SPEED_TIME
+
+log() { echo "[\$(date '+%Y-%m-%d %H:%M:%S')] \$*"; }
+
+attempt=1
+while [ \$attempt -le 5 ]; do
+    log "upgrade attempt \$attempt/5"
+    if "\$PIPX_BIN" install --force "\$FORK_URL"; then
+        # Self-check before restarting: a broken build must not take this
+        # machine's collector offline.
+        if "\$CC_BIN" --help >/dev/null 2>&1; then
+            launchctl unload "\$DAEMON_PLIST" 2>/dev/null
+            launchctl load "\$DAEMON_PLIST"
+            log "upgraded to \$("\$CC_BIN" --version 2>/dev/null) — daemon restarted"
+            exit 0
+        fi
+        log "installed but the CLI won't run — leaving the daemon on the old build"
+        exit 1
+    fi
+    log "attempt \$attempt failed (network likely not up yet)"
+    attempt=\$((attempt + 1))
+    [ \$attempt -le 5 ] && sleep 300
+done
+log "gave up after 5 attempts — run bootstrap.sh by hand"
+exit 1
+UPGRADE
+chmod +x "$UPGRADE_SCRIPT"
+
 cat > "$UPGRADE_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,8 +127,7 @@ cat > "$UPGRADE_PLIST" <<PLIST
     <key>ProgramArguments</key>
     <array>
         <string>/bin/sh</string>
-        <string>-c</string>
-        <string>${PIPX_BIN} install --force ${FORK_URL} &amp;&amp; ${CC_BIN} --help &gt;/dev/null 2&gt;&amp;1 &amp;&amp; (launchctl unload ${DAEMON_PLIST} 2&gt;/dev/null; launchctl load ${DAEMON_PLIST})</string>
+        <string>${UPGRADE_SCRIPT}</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
