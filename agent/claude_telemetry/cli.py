@@ -423,16 +423,16 @@ def sync(verbose: bool, daily_only: bool, force: bool) -> None:
         for err in result.errors:
             click.echo(f"  ERROR: {err}", err=True)
 
-    # Rate limits (optional)
-    if config.get("features", {}).get("ccost_installed"):
-        click.echo("\n  Collecting rate limits...", nl=False)
-        rate_data = collect_rate_limits(ccost_path=config.get("features", {}).get("ccost_path"))
-        if rate_data:
-            click.echo(f" {len(rate_data)} records")
-            result = sync_rate_limits(rate_data, api_key)
-            click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
-        else:
-            click.echo(" skipped (ccost unavailable)")
+    # Rate limits (optional) — not gated on ccost, which is only the fallback
+    # source behind statusline.jsonl (see daemon._sync_once for the full note).
+    click.echo("\n  Collecting rate limits...", nl=False)
+    rate_data = collect_rate_limits(ccost_path=config.get("features", {}).get("ccost_path"))
+    if rate_data:
+        click.echo(f" {len(rate_data)} records")
+        result = sync_rate_limits(rate_data, api_key)
+        click.echo(f"  Upserted: {result.records_upserted} ({result.duration_ms}ms)")
+    else:
+        click.echo(" skipped (no statusline feed, no ccost)")
 
     # Stats extra
     click.echo("\n  Reading stats cache...", nl=False)
@@ -850,17 +850,38 @@ def doctor() -> None:
     else:
         _check("Dashboard reachable", False, hint="Fix config first")
 
-    # 5. Statusline
+    # 5. Statusline — is a statusLine command wired at all, and is it OURS?
+    # Any statusline tool satisfies the bare key while never writing the JSONL
+    # feed we read, so a machine could pass this check and still report no rate
+    # limits at all. Name the conflict instead of green-lighting it.
     settings_path = Path.home() / ".claude" / "settings.json"
-    statusline_ok = False
+    statusline_cmd = ""
     if settings_path.exists():
         try:
             s = json.loads(settings_path.read_text())
-            statusline_ok = "statusLine" in s
+            statusline_cmd = str((s.get("statusLine") or {}).get("command") or "")
         except Exception:
             pass
-    _check("Statusline configured", statusline_ok,
-           hint="Run: cc-telemetry setup-statusline")
+    ours = "statusline.sh" in statusline_cmd or "statusline.ps1" in statusline_cmd
+    _check("Statusline configured", ours,
+           "cc-telemetry statusline",
+           f"Another statusline is set ({statusline_cmd}) — it does not write the "
+           f"rate-limit feed. Run: cc-telemetry setup-statusline"
+           if statusline_cmd else "Run: cc-telemetry setup-statusline")
+
+    # 5b. The feed itself — what collect_rate_limits actually reads. Configured
+    # but empty is the normal state right after setup: the script only runs once
+    # Claude Code renders a statusline, so a restart is the fix.
+    from .collector import _read_statusline_rate_limit
+    feed = _read_statusline_rate_limit(config.get("claude_data_dir") if config else None)
+    if feed:
+        five, week = feed.get("five_hour_pct"), feed.get("seven_day_pct")
+        detail = f"5h {five}% · weekly {week}%"
+    else:
+        detail = ""
+    _check("Rate limit feed", feed is not None, detail,
+           "No readings in ~/.claude/statusline.jsonl — restart Claude Code and "
+           "start a session, then re-run doctor")
 
     # 6. Hooks
     hooks_ok = False

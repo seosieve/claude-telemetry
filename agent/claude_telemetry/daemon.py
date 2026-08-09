@@ -92,17 +92,23 @@ def _run_sync_cycle(config: dict[str, Any]) -> tuple[dict[str, int], str | None,
 
     # Rate limits (optional). Capture weekly_reset_at so the daemon can wake
     # right after the weekly window rolls over (see run_daemon).
+    #
+    # NOT gated on ccost: statusline.jsonl is the primary source and ccost is
+    # only the fallback (see collect_rate_limits), so a ccost-less machine with
+    # a working statusline still reports. The old `if ccost_installed` gate was
+    # left over from the ccost-primary era and silently blanked this machine's
+    # gauges — which are account-shared, so it blanked them fleet-wide whenever
+    # it was the only machine syncing.
     weekly_reset_at: str | None = None
-    if config.get("features", {}).get("ccost_installed"):
-        rate_data = collect_rate_limits(
-            ccost_path=config.get("features", {}).get("ccost_path"),
-            claude_dir=config.get("claude_data_dir"),
-        )
-        if rate_data:
-            r = sync_rate_limits(rate_data, api_key)
-            results["rate_limits"] = r.records_upserted
-            auth_failed = auth_failed or r.auth_failed
-            weekly_reset_at = rate_data[0].weekly_reset_at
+    rate_data = collect_rate_limits(
+        ccost_path=config.get("features", {}).get("ccost_path"),
+        claude_dir=config.get("claude_data_dir"),
+    )
+    if rate_data:
+        r = sync_rate_limits(rate_data, api_key)
+        results["rate_limits"] = r.records_upserted
+        auth_failed = auth_failed or r.auth_failed
+        weekly_reset_at = rate_data[0].weekly_reset_at
 
     # Stats extra
     claude_dir = Path(config.get("claude_data_dir", str(Path.home() / ".claude")))
