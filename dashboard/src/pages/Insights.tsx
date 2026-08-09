@@ -315,7 +315,7 @@ export function Insights() {
     if (!arr || arr.length === 0) return null;
     return {
       window_5h_percent: accountSessionPct(arr)?.pct,
-      window_1w_percent: accountWeeklyPct(arr) ?? undefined,
+      window_1w_percent: accountWeeklyPct(arr)?.pct,
     };
   }, [rateLimitsArr]);
 

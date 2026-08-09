@@ -16,8 +16,9 @@
 // fresh updates from active machines get discarded until every machine syncs.
 //
 // Reset safety of freshest-wins:
-//   * scheduled weekly reset — pre-reset rows carry the old weekly_reset_at,
-//     which is now in the past, so the in-window filter drops them;
+//   * scheduled weekly reset — the freshest reading carries the old
+//     weekly_reset_at, now in the past, so it is reported as 0 rather than as
+//     its stale pre-reset % (see accountWeeklyPct);
 //   * off-cycle reset (e.g. the 2026-06-10 mid-week refresh) — pre-reset rows
 //     stay in-window, but they can only outrank a post-reset reading by
 //     timestamp, and honest reading timestamps make the post-reset reading
@@ -86,31 +87,51 @@ export function accountSessionPct(
 }
 
 /**
- * Account-wide weekly usage %: the newest reading whose weekly window is still
- * open. `rows` must be newest-first (the API sorts by `timestamp desc`), so
- * the first surviving row is the freshest reading of the shared pool.
+ * Account-wide weekly usage %: the freshest reading, with the reset time of the
+ * window it belongs to. `rows` must be newest-first (the API sorts by
+ * `timestamp desc`), so the first usable row is the freshest reading of the
+ * shared pool.
+ *
+ * When that reading's weekly window has already rolled over its % predates the
+ * reset that zeroed it, but the reset itself is information: usage is 0, not
+ * unknown. So report 0 with no reset time (the new window's anchor isn't known
+ * until a fresh reading lands) rather than null, which would make the card
+ * vanish for the whole gap between the reset and the next sync — a gap that
+ * lasts until a machine that reports rate limits actually runs. Older rows are
+ * not consulted in that case: rows are newest-first and a shared account pool
+ * resets for every machine at once, so anything behind a reset reading is
+ * equally stale. Mirrors accountSessionPct.
+ *
+ * Readings without a weekly_reset_at can't be checked and are taken at face
+ * value (resetsAtMs null). Returns null only when no reading exists at all.
  */
 export function accountWeeklyPct(
   rows: Array<Record<string, unknown>> | RateLimitRow[] | undefined,
-): number | null {
+): { pct: number; resetsAtMs: number | null } | null {
   if (!rows) return null;
   const now = Date.now();
   for (const raw of rows) {
     const r = raw as RateLimitRow;
     const pct = r.window_1w_percent;
-    const resetAt = r.weekly_reset_at ? new Date(r.weekly_reset_at).getTime() : 0;
-    if (pct == null || resetAt <= now) continue;
-    return pct;
+    if (pct == null) continue;
+    const resetsAtMs = r.weekly_reset_at ? new Date(r.weekly_reset_at).getTime() : null;
+    if (resetsAtMs != null && resetsAtMs <= now) return { pct: 0, resetsAtMs: null };
+    return { pct, resetsAtMs };
   }
   return null;
 }
 
 /**
  * Account-wide gauge for one model-scoped weekly limit (e.g. "fable" — the
- * 50%-of-weekly Fable cap): the newest row carrying an entry for `model`
- * whose own resets_at is still in the future. The OAuth values are account-
- * level and refreshed on every sync (upserts touch model_limits even when the
- * row's reading timestamp doesn't move), so the newest carrying row is fresh.
+ * 50%-of-weekly Fable cap): the newest row carrying an entry for `model`. The
+ * OAuth values are account-level and refreshed on every sync (upserts touch
+ * model_limits even when the row's reading timestamp doesn't move), so the
+ * newest carrying row is fresh.
+ *
+ * An entry whose own resets_at has passed is reported as 0 with no reset time,
+ * for the same reason accountWeeklyPct does it — the model cap rides the weekly
+ * window, so a rollover zeroes it and dropping the entry would only blank the
+ * card until some machine syncs again.
  */
 export function accountModelLimit(
   rows: Array<Record<string, unknown>> | RateLimitRow[] | undefined,
@@ -124,7 +145,7 @@ export function accountModelLimit(
     const pct = entry?.pct;
     if (pct == null) continue;
     const resetsAtMs = entry?.resets_at ? new Date(entry.resets_at).getTime() : null;
-    if (resetsAtMs != null && resetsAtMs <= now) continue;
+    if (resetsAtMs != null && resetsAtMs <= now) return { pct: 0, resetsAtMs: null };
     return { pct, resetsAtMs };
   }
   return null;

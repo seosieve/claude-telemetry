@@ -62,20 +62,15 @@ export function Overview() {
   const session5h = useMemo(() => accountSessionPct(rateLimitRows), [rateLimitRows]);
   const resetAtMs = session5h?.resetsAtMs ?? null;
 
-  const weeklyResetAtMs = useMemo(() => {
-    if (!rateLimitRows) return null;
-    const row = rateLimitRows.find((r) => r.weekly_reset_at);
-    const weeklyAt = row?.weekly_reset_at as string | undefined;
-    return weeklyAt ? new Date(weeklyAt).getTime() : null;
-  }, [rateLimitRows]);
-
-  // Account-wide weekly %: the freshest in-window reading across machines —
-  // rows are live values stamped with their reading time, so newest wins
-  // (reset-safety rationale in accountWeeklyPct).
-  const weekly1wPct = useMemo(
+  // Account-wide weekly %: the freshest reading across machines — rows are live
+  // values stamped with their reading time, so newest wins (reset-safety
+  // rationale in accountWeeklyPct). resetsAtMs is null once that window has
+  // rolled over, which is also what blanks the countdown label below.
+  const weekly1w = useMemo(
     () => accountWeeklyPct(rateLimitRows),
     [rateLimitRows],
   );
+  const weeklyResetAtMs = weekly1w?.resetsAtMs ?? null;
 
   // Fable's own weekly gauge (the 50%-of-weekly cap) — model_limits JSONB from
   // the OAuth usage API; null until an agent that reports it has synced.
@@ -128,7 +123,7 @@ export function Overview() {
 
   // Grid width follows how many gauges actually report — a fixed 3-up would
   // stretch two cards across three columns when one source is missing.
-  const rateLimitCards = [session5h, weekly1wPct, fableLimit].filter((v) => v != null).length;
+  const rateLimitCards = [session5h, weekly1w, fableLimit].filter((v) => v != null).length;
 
   const totalCost = summary.reduce((s, r) => s + r.total_cost, 0);
   const totalTokens = summary.reduce((s, r) => s + r.total_tokens, 0);
@@ -266,7 +261,7 @@ export function Overview() {
               <p className="mt-2 text-xs font-mono text-slate-400">{session5h.pct.toFixed(0)}%</p>
             </div>
           )}
-          {weekly1wPct != null && (
+          {weekly1w != null && (
             <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex items-baseline justify-between mb-2">
                 <p className="text-xs font-medium text-slate-400">Current Week (All Models)</p>
@@ -275,15 +270,15 @@ export function Overview() {
               <div className="h-3 rounded-full bg-white/[0.04]">
                 <div
                   className={`h-3 rounded-full transition-all animate-[bar-grow_600ms_ease-out] ${
-                    weekly1wPct > 80 ? "bg-fuchsia-500" : weekly1wPct > 50 ? "bg-amber-500" : "bg-violet-500"
+                    weekly1w.pct > 80 ? "bg-fuchsia-500" : weekly1w.pct > 50 ? "bg-amber-500" : "bg-violet-500"
                   }`}
                   style={{
-                    width: `${Math.min(100, weekly1wPct)}%`,
-                    minWidth: weekly1wPct > 0 ? "0.75rem" : undefined,
+                    width: `${Math.min(100, weekly1w.pct)}%`,
+                    minWidth: weekly1w.pct > 0 ? "0.75rem" : undefined,
                   }}
                 />
               </div>
-              <p className="mt-2 text-xs font-mono text-slate-400">{weekly1wPct.toFixed(0)}%</p>
+              <p className="mt-2 text-xs font-mono text-slate-400">{weekly1w.pct.toFixed(0)}%</p>
             </div>
           )}
           {fableLimit != null && (
