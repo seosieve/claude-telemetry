@@ -26,11 +26,14 @@
 //     aggregation ship together.)
 //
 // CAVEAT: freshest-across-all assumes every reporting machine shares one
-// account pool. True today — all three machines (충원 / K성민 / 대성) are on the
-// same account, which is also why 대성 reporting no rate limits costs us
-// nothing: its numbers would be identical to the other two. If a machine on a
-// *different* account joins the fleet, group rows by their weekly_reset_at
-// anchor first and aggregate per group — otherwise the pools mix.
+// account pool. True today — all four machines (충원 / 성민 / 정섭 / 대성) are
+// on the same account (verified 2026-08-18 by identical weekly_reset_at
+// anchors), which is also why 대성 reporting no rate limits costs us nothing:
+// 대성 uses the Claude desktop app only, which runs no statusline and refreshes
+// no CLI Keychain token, and its numbers would be identical to the others'
+// anyway. If a machine on a *different* account joins the fleet, group rows by
+// their weekly_reset_at anchor first and aggregate per group — otherwise the
+// pools mix.
 //
 // Corollary for callers: these values are account-scoped, so never fetch them
 // through a machine filter. See Overview.tsx's two un-filtered queries (the

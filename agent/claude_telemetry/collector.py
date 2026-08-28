@@ -421,14 +421,6 @@ def _read_oauth_tokens(
     return found
 
 
-def _read_oauth_token(
-    claude_dir: os.PathLike[str] | str | None = None,
-    notes: list[str] | None = None,
-) -> tuple[str, str] | None:
-    """(token, source) of the likeliest-live credential, or None. See _read_oauth_tokens."""
-    creds = _read_oauth_tokens(claude_dir, notes)
-    return (creds[0]["token"], creds[0]["source"]) if creds else None
-
 def _parse_iso_utc(value: object) -> float | None:
     """ISO-8601 timestamp → epoch seconds, or None when absent/unparseable."""
     if not isinstance(value, str) or not value:

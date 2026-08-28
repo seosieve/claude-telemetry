@@ -33,7 +33,7 @@ The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing
 - Dark-mode dashboard with interactive charts (Recharts)
 - **5-hour block tracking** with active block card, burn rate, and multi-PC timeline
 - **Plan vs API cost comparison** (Pro/Max 5x/Max 20x/Custom)
-- **Rate limit progress bars** (5-hour + weekly windows)
+- **Rate limit progress bars** (5-hour + weekly windows, plus the Fable weekly cap)
 - **Usage pace calculator** with trend detection
 - **Project budget tracker** with alerts at 90%/100%
 - **Weekly usage reports** with daily/weekly toggle
@@ -49,7 +49,7 @@ The agent does **no custom JSONL parsing** — it calls `ccusage` as the parsing
 - **Insights Engine** — trend analysis, anomaly detection, cost forecasting, period comparison
 - **Webhook notifications** — Discord/Slack alerts for budget and rate limit thresholds
 - **Setup wizard** (`cc-telemetry setup`) — one command configures hooks, MCP, statusline, daemon
-- **Doctor** (`cc-telemetry doctor`) — 10-point health check for all components
+- **Doctor** (`cc-telemetry doctor`) — 12-point health check for all components, including the rate-limit feed and the OAuth model-limit fetch
 
 ## Quick Start
 

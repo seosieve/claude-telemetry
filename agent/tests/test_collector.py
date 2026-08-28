@@ -14,7 +14,6 @@ from claude_telemetry.collector import (
     trim_statusline_log,
     _fetch_oauth_model_limits,
     _oauth_credential_sources,
-    _read_oauth_token,
     _read_oauth_tokens,
     _detect_subagent,
     _session_id_to_project,
@@ -451,7 +450,7 @@ class TestFetchOauthModelLimits:
         assert saved["last_error"] is None
         assert saved["fetched_at"] == saved["attempted_at"]
 
-    @patch("claude_telemetry.collector._read_oauth_token")
+    @patch("claude_telemetry.collector._read_oauth_tokens")
     def test_backoff_skips_fetch_but_still_filters_expired(self, tok: MagicMock, tmp_path: Path) -> None:
         cache = tmp_path / ".cc-telemetry-model-limits.json"
         import time as _time
@@ -481,14 +480,17 @@ class TestReadOauthToken:
             {"source": "file:/x/.credentials.json", "raw": "not json"},
         ]
         with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
-            assert _read_oauth_token() == ("live", "keychain:Claude Code-credentials-2143f80a")
-            # ...but every token stays available, likeliest-live first
-            assert [c["token"] for c in _read_oauth_tokens()] == ["live", "stale"]
+            creds = _read_oauth_tokens()
+        # likeliest-live first, but every token stays available for the fetch to try
+        assert [(c["token"], c["source"]) for c in creds] == [
+            ("live", "keychain:Claude Code-credentials-2143f80a"),
+            ("stale", "keychain:Claude Code-credentials"),
+        ]
 
     def test_none_when_no_source_has_a_token(self) -> None:
         sources = [{"source": "keychain:Claude Code-credentials", "raw": json.dumps({"claudeAiOauth": {}})}]
         with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
-            assert _read_oauth_token() is None
+            assert _read_oauth_tokens() == []
 
     def test_same_service_under_two_accounts_is_read_per_account(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         dump = (
@@ -572,7 +574,7 @@ class TestReadOauthToken:
         with patch("claude_telemetry.collector.sys") as fake_sys, \
                 patch("claude_telemetry.collector.subprocess.run", side_effect=fake_run):
             fake_sys.platform = "darwin"
-            assert _read_oauth_token(tmp_path, notes) is None
+            assert _read_oauth_tokens(tmp_path, notes) == []
         joined = " | ".join(notes)
         assert "no Claude Code-credentials-<hash> items" in joined
         assert "keychain:Claude Code-credentials: rc=44" in joined and "could not be found" in joined
