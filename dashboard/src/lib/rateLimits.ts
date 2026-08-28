@@ -33,11 +33,16 @@
 // anchor first and aggregate per group — otherwise the pools mix.
 //
 // Corollary for callers: these values are account-scoped, so never fetch them
-// through a machine filter. See Overview.tsx's single un-filtered query.
+// through a machine filter. See Overview.tsx's two un-filtered queries (the
+// newest-N listing for the 5h/weekly gauges, and the per-machine
+// model_limits=latest set for accountModelLimit).
 
 interface ModelLimitEntry {
   pct?: number | null;
   resets_at?: string | null;
+  // When the agent actually read this value from the OAuth API (agent ≥ 0.3.8).
+  // Older agents omit it; the row's timestamp stands in.
+  fetched_at?: string | null;
 }
 
 interface RateLimitRow {
@@ -123,15 +128,29 @@ export function accountWeeklyPct(
 
 /**
  * Account-wide gauge for one model-scoped weekly limit (e.g. "fable" — the
- * 50%-of-weekly Fable cap): the newest row carrying an entry for `model`. The
- * OAuth values are account-level and refreshed on every sync (upserts touch
- * model_limits even when the row's reading timestamp doesn't move), so the
- * newest carrying row is fresh.
+ * 50%-of-weekly Fable cap): the most recently READ entry for `model` that
+ * still belongs to the current window.
  *
- * An entry whose own resets_at has passed is reported as 0 with no reset time,
- * for the same reason accountWeeklyPct does it — the model cap rides the weekly
- * window, so a rollover zeroes it and dropping the entry would only blank the
- * card until some machine syncs again.
+ * Unlike the 5h/weekly gauges, the model_limits column is not a live reading
+ * stamped with the row's time — it is whatever the agent's OAuth cache held at
+ * sync time, which can be days old when that machine's fetch is broken. So two
+ * things differ from accountWeeklyPct:
+ *
+ *   * entries are ranked by their own fetched_at (falling back to the row
+ *     timestamp for pre-0.3.8 agents), not by row order, so a stale cache on a
+ *     busy machine cannot outrank a fresher reading on an idle one;
+ *   * an entry whose resets_at has passed is skipped rather than returned as
+ *     0 — it describes the previous window, and another machine may well hold
+ *     the current one. Only when every entry has expired is the answer 0 with
+ *     no reset time: the window genuinely rolled over and no machine has read
+ *     the new one yet (dropping the card would blank it until some agent
+ *     syncs). 2026-08-23~28 is the case this guards: one machine re-sent a
+ *     100% / resets-08-23 entry on fresh rows for five days, and the old
+ *     newest-row-wins logic showed 0% while the account sat at 65%.
+ *
+ * `rows` should be one row per machine — the newest carrying model_limits
+ * (see /api/rate-limits?model_limits=latest); a plain newest-N listing gets
+ * flooded by machines whose column is null.
  */
 export function accountModelLimit(
   rows: Array<Record<string, unknown>> | RateLimitRow[] | undefined,
@@ -139,14 +158,23 @@ export function accountModelLimit(
 ): { pct: number; resetsAtMs: number | null } | null {
   if (!rows) return null;
   const now = Date.now();
+  let best: { pct: number; resetsAtMs: number | null; readMs: number } | null = null;
+  let sawExpired = false;
   for (const raw of rows) {
     const r = raw as RateLimitRow;
     const entry = r.model_limits?.[model];
     const pct = entry?.pct;
     if (pct == null) continue;
     const resetsAtMs = entry?.resets_at ? new Date(entry.resets_at).getTime() : null;
-    if (resetsAtMs != null && resetsAtMs <= now) return { pct: 0, resetsAtMs: null };
-    return { pct, resetsAtMs };
+    if (resetsAtMs != null && resetsAtMs <= now) {
+      sawExpired = true;
+      continue;
+    }
+    const readRaw = entry?.fetched_at ?? r.timestamp;
+    const readMs = readRaw ? new Date(readRaw).getTime() : 0;
+    const safeReadMs = Number.isFinite(readMs) ? readMs : 0;
+    if (!best || safeReadMs > best.readMs) best = { pct, resetsAtMs, readMs: safeReadMs };
   }
-  return null;
+  if (best) return { pct: best.pct, resetsAtMs: best.resetsAtMs };
+  return sawExpired ? { pct: 0, resetsAtMs: null } : null;
 }

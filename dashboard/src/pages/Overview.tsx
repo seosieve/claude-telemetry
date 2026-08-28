@@ -11,7 +11,7 @@ import { MonthlyCostChart } from "../components/charts/MonthlyCostChart";
 import { DateRangePicker } from "../components/filters/DateRangePicker";
 import { useUsageData } from "../hooks/useUsageData";
 import { usePreferences } from "../hooks/usePreferences";
-import { fetchRateLimits, fetchMachines } from "../lib/api";
+import { fetchRateLimits, fetchLatestModelLimits, fetchMachines } from "../lib/api";
 import { accountWeeklyPct, accountModelLimit, accountSessionPct } from "../lib/rateLimits";
 import { rangeToDate, formatTokens, fillDateGaps } from "../lib/dateUtils";
 
@@ -73,10 +73,18 @@ export function Overview() {
   const weeklyResetAtMs = weekly1w?.resetsAtMs ?? null;
 
   // Fable's own weekly gauge (the 50%-of-weekly cap) — model_limits JSONB from
-  // the OAuth usage API; null until an agent that reports it has synced.
+  // the OAuth usage API; null until an agent that reports it has synced. Read
+  // from a per-machine "newest row carrying model_limits" set rather than the
+  // newest-50 listing above: a machine whose OAuth fetch is broken fills that
+  // listing with null columns and evicts the machines that do have a reading.
+  const { data: modelLimitRows } = useQuery({
+    queryKey: ["rate-limits", "model-limits-latest"],
+    queryFn: () => fetchLatestModelLimits() as Promise<Array<Record<string, unknown>>>,
+    refetchInterval: 300_000,
+  });
   const fableLimit = useMemo(
-    () => accountModelLimit(rateLimitRows, "fable"),
-    [rateLimitRows],
+    () => accountModelLimit(modelLimitRows, "fable"),
+    [modelLimitRows],
   );
 
   // When the weekly window is about to roll over, refetch rate limits a few

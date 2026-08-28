@@ -168,6 +168,12 @@ export async function fetchRateLimits(machineId?: string, limit?: string) {
   });
 }
 
+// Per active machine, its newest rate_limits row that carries model_limits —
+// the input accountModelLimit wants (see its doc for why newest-N won't do).
+export async function fetchLatestModelLimits() {
+  return fetchJson("rate-limits", { model_limits: "latest" });
+}
+
 // --- Machine management ---
 
 export async function deleteMachine(

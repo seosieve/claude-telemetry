@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -11,6 +12,9 @@ import time
 from datetime import datetime, timezone
 
 from .models import DailyUsage, SessionUsage, RateLimit, BlockUsage
+
+
+logger = logging.getLogger("claude-telemetry")
 
 
 class CollectorError(Exception):
@@ -317,6 +321,46 @@ def _read_oauth_token() -> str | None:
         return None
 
 
+def _parse_iso_utc(value: object) -> float | None:
+    """ISO-8601 timestamp → epoch seconds, or None when absent/unparseable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _current_model_limits(cache: dict, now: float) -> dict | None:
+    """The cached per-model entries that still describe the current window.
+
+    A cached reading is served across fetch failures, which is fine for a
+    weekly gauge right up to the weekly reset — after it, the reading describes
+    the *previous* window. Attached to a fresh row it then outranks every
+    machine's live value on the dashboard as "the newest reading, and its
+    window already rolled over → 0%". That is exactly what happened on
+    2026-08-23~28: one machine's fetch broke on 08-22 and its 100% /
+    resets-08-23 Fable entry rode along on new rows for five days while the
+    account was really at 65%. An entry past its own resets_at is therefore
+    dropped rather than served — an empty column is honest, a stale one lies.
+    """
+    limits = cache.get("model_limits")
+    if not isinstance(limits, dict):
+        return None
+    live: dict = {}
+    for name, entry in limits.items():
+        if not isinstance(entry, dict):
+            continue
+        resets = _parse_iso_utc(entry.get("resets_at"))
+        if resets is not None and resets <= now:
+            continue
+        live[name] = entry
+    return live or None
+
+
 def _fetch_oauth_model_limits(
     claude_dir: os.PathLike[str] | str | None = None,
 ) -> dict | None:
@@ -327,11 +371,20 @@ def _fetch_oauth_model_limits(
     api.anthropic.com/api/oauth/usage as kind="weekly_scoped" entries. That
     endpoint rate-limits aggressively (429 with no Retry-After), so readings
     are cached in <claude_dir>/.cc-telemetry-model-limits.json with a 15-min
-    TTL and a 5-min backoff after any failed attempt. Serving a stale reading
-    is fine — these are weekly gauges.
+    TTL and a 5-min backoff after any failed attempt. A cached reading is
+    served across failures only while it still describes the current weekly
+    window (see _current_model_limits), and every entry carries the time it
+    was actually read as `fetched_at`, so the dashboard can rank readings by
+    their own age instead of by the row they happen to ride on.
 
-    Returns e.g. {"fable": {"pct": 9, "resets_at": "2026-08-02T03:00:00+00:00"}},
-    or None when the account has no scoped limits or nothing could be read.
+    Failures are recorded in the cache as `last_error` (shown by
+    `cc-telemetry doctor`) and logged — a machine that silently never fetches
+    contributes nothing and is otherwise indistinguishable from an account
+    without scoped limits.
+
+    Returns e.g. {"fable": {"pct": 9, "resets_at": "2026-08-02T03:00:00+00:00",
+    "fetched_at": "2026-07-30T01:02:03+00:00"}}, or None when the account has
+    no scoped limits or nothing current could be read.
     """
     from pathlib import Path
 
@@ -339,21 +392,22 @@ def _fetch_oauth_model_limits(
     cache_path = base / ".cc-telemetry-model-limits.json"
     cache: dict = {}
     try:
-        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        loaded = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            cache = loaded
     except (OSError, json.JSONDecodeError):
         pass
-    cached_limits = cache.get("model_limits")
     now = time.time()
 
     fetched_at = cache.get("fetched_at")
     if isinstance(fetched_at, (int, float)) and now - fetched_at < _OAUTH_CACHE_TTL:
-        return cached_limits
+        return _current_model_limits(cache, now)
     attempted_at = cache.get("attempted_at")
     if (
         isinstance(attempted_at, (int, float))
         and now - attempted_at < _OAUTH_RETRY_INTERVAL
     ):
-        return cached_limits
+        return _current_model_limits(cache, now)
 
     def _save(updates: dict) -> None:
         cache.update(updates)
@@ -363,10 +417,14 @@ def _fetch_oauth_model_limits(
         except OSError:
             pass
 
+    def _fail(reason: str) -> dict | None:
+        logger.warning("model limits: OAuth usage fetch failed: %s", reason)
+        _save({"attempted_at": now, "last_error": reason})
+        return _current_model_limits(cache, now)
+
     token = _read_oauth_token()
     if not token:
-        _save({"attempted_at": now})
-        return cached_limits
+        return _fail("no OAuth token (Claude Code not signed in, or its Keychain item is unreadable)")
 
     import urllib.error
     import urllib.request
@@ -381,10 +439,16 @@ def _fetch_oauth_model_limits(
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
-        _save({"attempted_at": now})
-        return cached_limits
+    except urllib.error.HTTPError as e:
+        return _fail(f"HTTP {e.code}")
+    except urllib.error.URLError as e:
+        return _fail(f"network: {e.reason}")
+    except (OSError, json.JSONDecodeError, TimeoutError) as e:
+        return _fail(f"{type(e).__name__}: {e}")
+    if not isinstance(data, dict):
+        return _fail("unexpected response shape")
 
+    read_at = datetime.fromtimestamp(now, timezone.utc).isoformat()
     scoped: dict = {}
     for entry in data.get("limits") or []:
         if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
@@ -396,11 +460,11 @@ def _fetch_oauth_model_limits(
         scoped[str(name).lower()] = {
             "pct": entry.get("percent"),
             "resets_at": entry.get("resets_at"),
+            "fetched_at": read_at,
         }
     result = scoped or None
-    _save({"fetched_at": now, "attempted_at": now, "model_limits": result})
+    _save({"fetched_at": now, "attempted_at": now, "model_limits": result, "last_error": None})
     return result
-
 
 def trim_statusline_log(
     claude_dir: os.PathLike[str] | str | None = None,

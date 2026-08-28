@@ -12,6 +12,7 @@ from claude_telemetry.collector import (
     collect_session_usage,
     collect_rate_limits,
     trim_statusline_log,
+    _fetch_oauth_model_limits,
     _detect_subagent,
     _session_id_to_project,
     CollectorError,
@@ -323,3 +324,90 @@ class TestTrimStatuslineLog:
         assert trim_statusline_log(tmp_path) is None  # no file
         (tmp_path / "statusline.jsonl").write_text("")
         assert trim_statusline_log(tmp_path) is None  # empty file
+
+
+class TestFetchOauthModelLimits:
+    """The OAuth model-limits cache: what gets served when the fetch fails."""
+
+    FUTURE = "2099-01-01T03:00:00+00:00"
+    PAST = "2000-01-01T03:00:00+00:00"
+
+    def _seed(self, tmp_path: Path, *, resets_at: str, fetched_at: str = "2000-01-01T00:00:00+00:00") -> Path:
+        cache = tmp_path / ".cc-telemetry-model-limits.json"
+        cache.write_text(json.dumps({
+            "fetched_at": 1.0,  # long past the 15-min TTL
+            "attempted_at": 1.0,  # and the 5-min backoff
+            "model_limits": {"fable": {"pct": 100, "resets_at": resets_at, "fetched_at": fetched_at}},
+        }))
+        return cache
+
+    @patch("claude_telemetry.collector._read_oauth_token", return_value=None)
+    def test_drops_entry_past_its_reset_when_fetch_fails(self, _tok: MagicMock, tmp_path: Path) -> None:
+        # The 2026-08-23~28 incident: a machine whose fetch broke kept re-sending
+        # last week's 100% on fresh rows, and the dashboard read it as "newest
+        # reading, window rolled over → 0%" while the account sat at 65%.
+        cache = self._seed(tmp_path, resets_at=self.PAST)
+
+        assert _fetch_oauth_model_limits(tmp_path) is None
+        saved = json.loads(cache.read_text())
+        assert "no OAuth token" in saved["last_error"]
+        assert saved["fetched_at"] == 1.0  # a failure never counts as a fetch
+
+    @patch("claude_telemetry.collector._read_oauth_token", return_value=None)
+    def test_serves_in_window_entry_when_fetch_fails(self, _tok: MagicMock, tmp_path: Path) -> None:
+        self._seed(tmp_path, resets_at=self.FUTURE, fetched_at="2026-08-25T18:00:00+00:00")
+
+        result = _fetch_oauth_model_limits(tmp_path)
+        assert result == {"fable": {"pct": 100, "resets_at": self.FUTURE,
+                                    "fetched_at": "2026-08-25T18:00:00+00:00"}}
+
+    @patch("claude_telemetry.collector._read_oauth_token", return_value="tok")
+    def test_http_error_is_recorded_and_cached_entry_kept(self, _tok: MagicMock, tmp_path: Path) -> None:
+        import urllib.error
+
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
+        err = urllib.error.HTTPError("https://x", 429, "Too Many Requests", {}, None)  # type: ignore[arg-type]
+        with patch("urllib.request.urlopen", side_effect=err):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert result is not None and result["fable"]["pct"] == 100
+        saved = json.loads(cache.read_text())
+        assert saved["last_error"] == "HTTP 429"
+        assert saved["attempted_at"] > saved["fetched_at"]
+
+    @patch("claude_telemetry.collector._read_oauth_token", return_value="tok")
+    def test_success_stamps_fetched_at_and_clears_error(self, _tok: MagicMock, tmp_path: Path) -> None:
+        cache = self._seed(tmp_path, resets_at=self.PAST)
+        body = json.dumps({"limits": [
+            {"kind": "weekly_all", "percent": 40, "resets_at": self.FUTURE, "scope": None},
+            {"kind": "weekly_scoped", "percent": 65, "resets_at": self.FUTURE,
+             "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}},
+        ]}).encode()
+        resp = MagicMock()
+        resp.__enter__.return_value.read.return_value = body
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert result is not None
+        fable = result["fable"]
+        assert (fable["pct"], fable["resets_at"]) == (65, self.FUTURE)
+        # fetched_at is the reading's own time — the dashboard ranks by it, so a
+        # cached entry re-sent later must keep the original, not the sync time.
+        fetched = datetime.fromisoformat(fable["fetched_at"])
+        assert abs((datetime.now(timezone.utc) - fetched).total_seconds()) < 60
+        saved = json.loads(cache.read_text())
+        assert saved["last_error"] is None
+        assert saved["fetched_at"] == saved["attempted_at"]
+
+    @patch("claude_telemetry.collector._read_oauth_token")
+    def test_backoff_skips_fetch_but_still_filters_expired(self, tok: MagicMock, tmp_path: Path) -> None:
+        cache = tmp_path / ".cc-telemetry-model-limits.json"
+        import time as _time
+        cache.write_text(json.dumps({
+            "fetched_at": 1.0,
+            "attempted_at": _time.time() - 10,  # failed 10s ago → inside the backoff
+            "model_limits": {"fable": {"pct": 100, "resets_at": self.PAST}},
+        }))
+
+        assert _fetch_oauth_model_limits(tmp_path) is None
+        tok.assert_not_called()

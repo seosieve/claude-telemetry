@@ -900,6 +900,50 @@ def doctor() -> None:
                      "whether this machine is on a subscription plan)")
     _check("Rate limit feed", feed is not None, feed_detail, feed_hint)
 
+    # 5c. Model-scoped weekly gauges (Fable's 50% cap) come from the OAuth
+    # usage API, not the statusline feed — a second, independent way for a
+    # machine to silently report nothing. Run the (cached, backed-off) fetch so
+    # the verdict is live, then read what it recorded: on success fetched_at
+    # and attempted_at coincide; on failure attempted_at moves on alone and
+    # last_error names the reason.
+    from .collector import _fetch_oauth_model_limits
+    model_limits = _fetch_oauth_model_limits(claude_dir)
+    ml_cache: dict = {}
+    try:
+        loaded = json.loads((claude_dir / ".cc-telemetry-model-limits.json").read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            ml_cache = loaded
+    except (OSError, ValueError):
+        pass
+    ml_fetched, ml_attempted = ml_cache.get("fetched_at"), ml_cache.get("attempted_at")
+    ml_ok = isinstance(ml_fetched, (int, float)) and (
+        not isinstance(ml_attempted, (int, float)) or ml_fetched >= ml_attempted
+    )
+
+    def _ago(ts: object) -> str:
+        if not isinstance(ts, (int, float)):
+            return "never"
+        secs = max(0, int(time.time() - ts))
+        if secs < 3600:
+            return f"{secs // 60}m ago"
+        if secs < 86400:
+            return f"{secs // 3600}h ago"
+        return f"{secs // 86400}d ago"
+
+    ml_detail = ml_hint = ""
+    if ml_ok:
+        gauges = (" · ".join(f"{k.title()} {v.get('pct')}%" for k, v in model_limits.items())
+                  if model_limits else "no model-scoped limits on this account")
+        ml_detail = f"{gauges} (fetched {_ago(ml_fetched)})"
+    else:
+        reason = ml_cache.get("last_error") or "failed (reason not recorded — agent older than 0.3.8)"
+        ml_hint = f"last success {_ago(ml_fetched)}, last attempt {_ago(ml_attempted)}: {reason}"
+        if "no OAuth token" in reason or "HTTP 401" in reason or "HTTP 403" in reason:
+            ml_hint += " — run `claude` and sign in with the subscription account, then re-run doctor"
+        elif "HTTP 429" in reason:
+            ml_hint += " — rate-limited by the usage API, re-run doctor in a few minutes"
+    _check("Model limits (OAuth)", ml_ok, ml_detail, ml_hint)
+
     # 6. Hooks
     hooks_ok = False
     if settings_path.exists():
