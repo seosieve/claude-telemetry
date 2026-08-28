@@ -15,6 +15,7 @@ from claude_telemetry.collector import (
     _fetch_oauth_model_limits,
     _oauth_credential_sources,
     _read_oauth_token,
+    _read_oauth_tokens,
     _detect_subagent,
     _session_id_to_project,
     CollectorError,
@@ -343,7 +344,7 @@ class TestFetchOauthModelLimits:
         }))
         return cache
 
-    @patch("claude_telemetry.collector._read_oauth_token", return_value=None)
+    @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[])
     def test_drops_entry_past_its_reset_when_fetch_fails(self, _tok: MagicMock, tmp_path: Path) -> None:
         # The 2026-08-23~28 incident: a machine whose fetch broke kept re-sending
         # last week's 100% on fresh rows, and the dashboard read it as "newest
@@ -355,7 +356,7 @@ class TestFetchOauthModelLimits:
         assert saved["last_error"].startswith("no OAuth token")
         assert saved["fetched_at"] == 1.0  # a failure never counts as a fetch
 
-    @patch("claude_telemetry.collector._read_oauth_token", return_value=None)
+    @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[])
     def test_serves_in_window_entry_when_fetch_fails(self, _tok: MagicMock, tmp_path: Path) -> None:
         self._seed(tmp_path, resets_at=self.FUTURE, fetched_at="2026-08-25T18:00:00+00:00")
 
@@ -363,7 +364,7 @@ class TestFetchOauthModelLimits:
         assert result == {"fable": {"pct": 100, "resets_at": self.FUTURE,
                                     "fetched_at": "2026-08-25T18:00:00+00:00"}}
 
-    @patch("claude_telemetry.collector._read_oauth_token", return_value=("tok", "keychain:test"))
+    @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[{"token": "tok", "source": "keychain:test", "expires": 0}])
     def test_http_error_is_recorded_and_cached_entry_kept(self, _tok: MagicMock, tmp_path: Path) -> None:
         import urllib.error
 
@@ -377,7 +378,56 @@ class TestFetchOauthModelLimits:
         assert saved["last_error"].startswith("HTTP 429")
         assert saved["attempted_at"] > saved["fetched_at"]
 
-    @patch("claude_telemetry.collector._read_oauth_token", return_value=("tok", "keychain:test"))
+    def test_rejected_token_falls_through_to_the_next_candidate(self, tmp_path: Path) -> None:
+        # 정섭's machine, 2026-08-28: the item with the latest expiresAt was a
+        # signed-out profile (401); the live session's token sat in another.
+        import urllib.error
+
+        cache = self._seed(tmp_path, resets_at=self.PAST)
+        creds = [
+            {"token": "stale", "source": "keychain:Claude Code-credentials-38964a7f", "expires": 9e9},
+            {"token": "live", "source": "keychain:Claude Code-credentials", "expires": 1.0},
+        ]
+        body = json.dumps({"limits": [
+            {"kind": "weekly_scoped", "percent": 71, "resets_at": self.FUTURE,
+             "scope": {"model": {"display_name": "Fable"}}},
+        ]}).encode()
+        used: list[str] = []
+
+        def fake_urlopen(req, timeout=0):
+            used.append(req.get_header("Authorization"))
+            if req.get_header("Authorization") == "Bearer stale":
+                raise urllib.error.HTTPError("https://x", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
+            resp = MagicMock()
+            resp.__enter__.return_value.read.return_value = body
+            return resp
+
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert used == ["Bearer stale", "Bearer live"]
+        assert result is not None and result["fable"]["pct"] == 71
+        saved = json.loads(cache.read_text())
+        assert saved["token_source"] == "keychain:Claude Code-credentials"
+        assert saved["last_error"] is None
+
+    def test_all_tokens_rejected_names_each(self, tmp_path: Path) -> None:
+        import urllib.error
+
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
+        creds = [{"token": "a", "source": "keychain:A", "expires": 2.0},
+                 {"token": "b", "source": "file:B", "expires": 1.0}]
+        err = urllib.error.HTTPError("https://x", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=err):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert result is not None and result["fable"]["pct"] == 100  # in-window cache still served
+        assert json.loads(cache.read_text())["last_error"] == \
+            "every token rejected — HTTP 401 for keychain:A; HTTP 401 for file:B"
+
+    @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[{"token": "tok", "source": "keychain:test", "expires": 0}])
     def test_success_stamps_fetched_at_and_clears_error(self, _tok: MagicMock, tmp_path: Path) -> None:
         cache = self._seed(tmp_path, resets_at=self.PAST)
         body = json.dumps({"limits": [
@@ -426,17 +476,54 @@ class TestReadOauthToken:
         # A CLAUDE_CONFIG_DIR profile beside a stale default-dir item: only the
         # profile in use gets refreshed, so its expiresAt is the later one.
         sources = [
-            ("keychain:Claude Code-credentials", self._creds("stale", 1_000)),
-            ("keychain:Claude Code-credentials-2143f80a", self._creds("live", 2_000)),
-            ("file:/x/.credentials.json", "not json"),
+            {"source": "keychain:Claude Code-credentials", "raw": self._creds("stale", 1_000)},
+            {"source": "keychain:Claude Code-credentials-2143f80a", "raw": self._creds("live", 2_000)},
+            {"source": "file:/x/.credentials.json", "raw": "not json"},
         ]
         with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
             assert _read_oauth_token() == ("live", "keychain:Claude Code-credentials-2143f80a")
+            # ...but every token stays available, likeliest-live first
+            assert [c["token"] for c in _read_oauth_tokens()] == ["live", "stale"]
 
     def test_none_when_no_source_has_a_token(self) -> None:
-        sources = [("keychain:Claude Code-credentials", json.dumps({"claudeAiOauth": {}}))]
+        sources = [{"source": "keychain:Claude Code-credentials", "raw": json.dumps({"claudeAiOauth": {}})}]
         with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
             assert _read_oauth_token() is None
+
+    def test_same_service_under_two_accounts_is_read_per_account(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dump = (
+            'keychain: "/Users/j/Library/Keychains/login.keychain-db"\n'
+            '    "acct"<blob>="jimmy"\n    "mdat"<timedate>=0x32303236  "20260820051100Z\\000"\n'
+            '    "svce"<blob>="Claude Code-credentials"\n'
+            'keychain: "/Users/j/Library/Keychains/login.keychain-db"\n'
+            '    "acct"<blob>="work"\n    "mdat"<timedate>=0x32303236  "20260828090000Z\\000"\n'
+            '    "svce"<blob>="Claude Code-credentials"\n'
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **_kw):
+            calls.append(cmd)
+            r = MagicMock()
+            if cmd[1] == "dump-keychain":
+                r.returncode, r.stdout = 0, dump
+            else:
+                r.returncode, r.stdout = 0, self._creds(cmd[-1], 1)
+            return r
+
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        with patch("claude_telemetry.collector.sys") as fake_sys, \
+                patch("claude_telemetry.collector.subprocess.run", side_effect=fake_run):
+            fake_sys.platform = "darwin"
+            sources = _oauth_credential_sources(tmp_path)
+
+        # find-generic-password -s NAME alone returns whichever item comes first;
+        # each account is addressed explicitly so neither shadows the other.
+        assert [c[-3:] for c in calls if c[1] == "find-generic-password"] == [
+            ["Claude Code-credentials", "-a", "jimmy"], ["Claude Code-credentials", "-a", "work"],
+        ]
+        assert [(x["acct"], x["mdat"]) for x in sources] == [
+            ("jimmy", "2026-08-20T05:11:00+00:00"), ("work", "2026-08-28T09:00:00+00:00"),
+        ]
 
     def test_darwin_enumerates_suffixed_keychain_items(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         dump = (
@@ -466,7 +553,9 @@ class TestReadOauthToken:
         assert [cmd[-1] for cmd in calls if cmd[1] == "find-generic-password"] == [
             "Claude Code-credentials", "Claude Code-credentials-2143f80a",
         ]
-        assert sources == [("keychain:Claude Code-credentials-2143f80a", self._creds("live", 5))]
+        assert [(x["source"], x["raw"]) for x in sources] == [
+            ("keychain:Claude Code-credentials-2143f80a", self._creds("live", 5)),
+        ]
 
     def test_notes_explain_every_empty_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run(cmd, **_kw):
@@ -486,7 +575,7 @@ class TestReadOauthToken:
             assert _read_oauth_token(tmp_path, notes) is None
         joined = " | ".join(notes)
         assert "no Claude Code-credentials-<hash> items" in joined
-        assert "keychain 'Claude Code-credentials': rc=44" in joined and "could not be found" in joined
+        assert "keychain:Claude Code-credentials: rc=44" in joined and "could not be found" in joined
         assert f"no {tmp_path / '.credentials.json'}" in joined
 
     def test_reads_credentials_file_under_config_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -497,4 +586,5 @@ class TestReadOauthToken:
         with patch("claude_telemetry.collector.sys") as fake_sys:
             fake_sys.platform = "linux"
             sources = _oauth_credential_sources(tmp_path)
-        assert (f"file:{cfg / '.credentials.json'}", self._creds("filetok", 9)) in sources
+        assert {"source": f"file:{cfg / '.credentials.json'}", "raw": self._creds("filetok", 9),
+                "acct": None, "mdat": None} in sources

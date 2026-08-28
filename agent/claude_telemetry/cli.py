@@ -948,6 +948,22 @@ def doctor() -> None:
         elif "HTTP 429" in reason:
             ml_hint += " — rate-limited by the usage API, re-run doctor in a few minutes"
     _check("Model limits (OAuth)", ml_ok, ml_detail, ml_hint)
+    if not ml_ok:
+        # Show every credential the collector can see, so "HTTP 401" can be
+        # read as "that profile is stale, and the live one is not in the
+        # Keychain" rather than as a dead end. Attributes only — no secrets.
+        from .collector import _read_oauth_tokens
+        from datetime import datetime, timezone
+        for cred in _read_oauth_tokens(claude_dir):
+            exp = cred.get("expires") or 0
+            exp_s = (datetime.fromtimestamp(exp, timezone.utc).strftime("%m-%d %H:%MZ")
+                     + (" expired" if exp < time.time() else "")) if exp else "no expiry"
+            mdat = (cred.get("mdat") or "")[5:16].replace("T", " ")
+            scopes = cred.get("scopes") or []
+            click.echo(f"        · {cred['source']}: expires {exp_s}"
+                       + (f", modified {mdat}Z" if mdat else "")
+                       + f", plan {cred.get('subscription') or '?'}"
+                       + (", no user:profile scope" if scopes and "user:profile" not in scopes else ""))
 
     # 6. Hooks
     hooks_ok = False
