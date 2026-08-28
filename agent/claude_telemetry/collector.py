@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -287,39 +288,109 @@ _OAUTH_CACHE_TTL = 900  # weekly gauges move slowly — refetch after 15 min
 _OAUTH_RETRY_INTERVAL = 300  # after a failed attempt, back off for 5 min
 
 
-def _read_oauth_token() -> str | None:
-    """Read Claude Code's OAuth access token (Keychain on macOS, file elsewhere).
+def _oauth_credential_sources(
+    claude_dir: os.PathLike[str] | str | None = None,
+    notes: list[str] | None = None,
+) -> list[tuple[str, str]]:
+    """Every place Claude Code may keep its credentials: (label, raw JSON text).
 
-    Claude Code keeps the token refreshed as it runs; we only ever read it. A
-    missing or expired token is not an error — the caller just skips this cycle.
+    macOS: the documented Keychain item is "Claude Code-credentials", but
+    "Claude Code-credentials-<hash>" items exist too (one per profile / config
+    dir — seen in the wild, not in the docs). The daemon runs without the
+    user's shell env, so rather than trusting CLAUDE_CONFIG_DIR it enumerates
+    every such item (dump-keychain prints attributes only, never secrets; each
+    secret is then read per item). Everywhere: .credentials.json under
+    CLAUDE_CONFIG_DIR, the configured claude dir, and ~/.claude.
+
+    `notes`, when given, collects one line per source that yielded nothing —
+    the `security` exit code and message tell "item missing" (44) apart from
+    "Keychain not reachable from this session" (36, e.g. over SSH) and from a
+    permission prompt that timed out, which `cc-telemetry doctor` then shows.
     """
-    raw: str | None = None
+    from pathlib import Path
+
+    def _note(msg: str) -> None:
+        if notes is not None:
+            notes.append(msg)
+
+    sources: list[tuple[str, str]] = []
     if sys.platform == "darwin":
+        names = ["Claude Code-credentials"]
         try:
-            result = subprocess.run(
-                ["security", "find-generic-password", "-w", "-s", "Claude Code-credentials"],
+            dump = subprocess.run(
+                ["security", "dump-keychain"],
                 capture_output=True,
                 text=True,
-                timeout=10,
-            )
+                timeout=20,
+            ).stdout
+            names += sorted(set(re.findall(r'"svce"<blob>="(Claude Code-credentials-[^"]+)"', dump)))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            _note(f"keychain listing failed: {type(e).__name__}")
+        if len(names) == 1:
+            _note("no Claude Code-credentials-<hash> items in the Keychain")
+        for name in names:
+            try:
+                result = subprocess.run(
+                    ["security", "find-generic-password", "-w", "-s", name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                _note(f"keychain '{name}': timed out after 10s (a Keychain permission prompt? "
+                      "answer it with Always Allow)")
+                continue
+            except OSError as e:
+                _note(f"keychain '{name}': {e}")
+                continue
             if result.returncode == 0 and result.stdout.strip():
-                raw = result.stdout.strip()
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    if raw is None:
-        from pathlib import Path
-
+                sources.append((f"keychain:{name}", result.stdout.strip()))
+            else:
+                msg = (result.stderr or "").strip().splitlines()
+                _note(f"keychain '{name}': rc={result.returncode}"
+                      + (f" {msg[-1]}" if msg else ""))
+    dirs = [os.environ.get("CLAUDE_CONFIG_DIR"), str(claude_dir) if claude_dir else None,
+            str(Path.home() / ".claude")]
+    for d in dict.fromkeys(x for x in dirs if x):
+        path = Path(d) / ".credentials.json"
         try:
-            raw = (Path.home() / ".claude" / ".credentials.json").read_text(
-                encoding="utf-8"
-            )
+            sources.append((f"file:{path}", path.read_text(encoding="utf-8")))
         except OSError:
-            return None
-    try:
-        return (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken")
-    except (json.JSONDecodeError, AttributeError):
-        return None
+            _note(f"no {path}")
+    return sources
 
+
+def _read_oauth_token(
+    claude_dir: os.PathLike[str] | str | None = None,
+    notes: list[str] | None = None,
+) -> tuple[str, str] | None:
+    """Claude Code's OAuth access token and the source it was read from.
+
+    Claude Code keeps the token refreshed as it runs; we only ever read it.
+    Only the profile actually in use gets refreshed, so when several sources
+    hold a token the one with the latest expiresAt is the live one — a stale
+    profile's item (2026-08: a default-dir item beside a CLAUDE_CONFIG_DIR
+    profile's) would otherwise be picked by name and 401 forever. A missing
+    token is not an error — the caller just skips this cycle.
+    """
+    best: tuple[float, str, str] | None = None
+    for source, raw in _oauth_credential_sources(claude_dir, notes):
+        try:
+            oauth = json.loads(raw).get("claudeAiOauth") or {}
+        except (json.JSONDecodeError, AttributeError):
+            if notes is not None:
+                notes.append(f"{source}: not credentials JSON")
+            continue
+        token = oauth.get("accessToken") if isinstance(oauth, dict) else None
+        if not token:
+            if notes is not None:
+                notes.append(f"{source}: no claudeAiOauth.accessToken (API-key login?)")
+            continue
+        expires = oauth.get("expiresAt")
+        expires = float(expires) if isinstance(expires, (int, float)) else 0.0
+        if best is None or expires > best[0]:
+            best = (expires, str(token), source)
+    return (best[1], best[2]) if best else None
 
 def _parse_iso_utc(value: object) -> float | None:
     """ISO-8601 timestamp → epoch seconds, or None when absent/unparseable."""
@@ -422,9 +493,11 @@ def _fetch_oauth_model_limits(
         _save({"attempted_at": now, "last_error": reason})
         return _current_model_limits(cache, now)
 
-    token = _read_oauth_token()
-    if not token:
-        return _fail("no OAuth token (Claude Code not signed in, or its Keychain item is unreadable)")
+    notes: list[str] = []
+    cred = _read_oauth_token(base, notes)
+    if not cred:
+        return _fail("no OAuth token — " + "; ".join(notes))
+    token, token_source = cred
 
     import urllib.error
     import urllib.request
@@ -440,7 +513,7 @@ def _fetch_oauth_model_limits(
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        return _fail(f"HTTP {e.code}")
+        return _fail(f"HTTP {e.code} (token from {token_source})")
     except urllib.error.URLError as e:
         return _fail(f"network: {e.reason}")
     except (OSError, json.JSONDecodeError, TimeoutError) as e:
@@ -463,7 +536,8 @@ def _fetch_oauth_model_limits(
             "fetched_at": read_at,
         }
     result = scoped or None
-    _save({"fetched_at": now, "attempted_at": now, "model_limits": result, "last_error": None})
+    _save({"fetched_at": now, "attempted_at": now, "model_limits": result,
+           "last_error": None, "token_source": token_source})
     return result
 
 def trim_statusline_log(

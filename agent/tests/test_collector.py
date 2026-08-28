@@ -13,6 +13,8 @@ from claude_telemetry.collector import (
     collect_rate_limits,
     trim_statusline_log,
     _fetch_oauth_model_limits,
+    _oauth_credential_sources,
+    _read_oauth_token,
     _detect_subagent,
     _session_id_to_project,
     CollectorError,
@@ -350,7 +352,7 @@ class TestFetchOauthModelLimits:
 
         assert _fetch_oauth_model_limits(tmp_path) is None
         saved = json.loads(cache.read_text())
-        assert "no OAuth token" in saved["last_error"]
+        assert saved["last_error"].startswith("no OAuth token")
         assert saved["fetched_at"] == 1.0  # a failure never counts as a fetch
 
     @patch("claude_telemetry.collector._read_oauth_token", return_value=None)
@@ -361,7 +363,7 @@ class TestFetchOauthModelLimits:
         assert result == {"fable": {"pct": 100, "resets_at": self.FUTURE,
                                     "fetched_at": "2026-08-25T18:00:00+00:00"}}
 
-    @patch("claude_telemetry.collector._read_oauth_token", return_value="tok")
+    @patch("claude_telemetry.collector._read_oauth_token", return_value=("tok", "keychain:test"))
     def test_http_error_is_recorded_and_cached_entry_kept(self, _tok: MagicMock, tmp_path: Path) -> None:
         import urllib.error
 
@@ -372,10 +374,10 @@ class TestFetchOauthModelLimits:
 
         assert result is not None and result["fable"]["pct"] == 100
         saved = json.loads(cache.read_text())
-        assert saved["last_error"] == "HTTP 429"
+        assert saved["last_error"].startswith("HTTP 429")
         assert saved["attempted_at"] > saved["fetched_at"]
 
-    @patch("claude_telemetry.collector._read_oauth_token", return_value="tok")
+    @patch("claude_telemetry.collector._read_oauth_token", return_value=("tok", "keychain:test"))
     def test_success_stamps_fetched_at_and_clears_error(self, _tok: MagicMock, tmp_path: Path) -> None:
         cache = self._seed(tmp_path, resets_at=self.PAST)
         body = json.dumps({"limits": [
@@ -411,3 +413,88 @@ class TestFetchOauthModelLimits:
 
         assert _fetch_oauth_model_limits(tmp_path) is None
         tok.assert_not_called()
+
+
+class TestReadOauthToken:
+    """Which of several Claude Code credential stores is the live one."""
+
+    @staticmethod
+    def _creds(token: str, expires_ms: int) -> str:
+        return json.dumps({"claudeAiOauth": {"accessToken": token, "expiresAt": expires_ms}})
+
+    def test_picks_the_token_with_the_latest_expiry(self) -> None:
+        # A CLAUDE_CONFIG_DIR profile beside a stale default-dir item: only the
+        # profile in use gets refreshed, so its expiresAt is the later one.
+        sources = [
+            ("keychain:Claude Code-credentials", self._creds("stale", 1_000)),
+            ("keychain:Claude Code-credentials-2143f80a", self._creds("live", 2_000)),
+            ("file:/x/.credentials.json", "not json"),
+        ]
+        with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
+            assert _read_oauth_token() == ("live", "keychain:Claude Code-credentials-2143f80a")
+
+    def test_none_when_no_source_has_a_token(self) -> None:
+        sources = [("keychain:Claude Code-credentials", json.dumps({"claudeAiOauth": {}}))]
+        with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
+            assert _read_oauth_token() is None
+
+    def test_darwin_enumerates_suffixed_keychain_items(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dump = (
+            'keychain: "/Users/j/Library/Keychains/login.keychain-db"\n'
+            '    "svce"<blob>="Claude Code-credentials-2143f80a"\n'
+            '    "svce"<blob>="Something else"\n'
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **_kw):
+            calls.append(cmd)
+            r = MagicMock()
+            if cmd[1] == "dump-keychain":
+                r.returncode, r.stdout = 0, dump
+            elif cmd[-1] == "Claude Code-credentials":
+                r.returncode, r.stdout = 44, ""  # the default-dir item does not exist
+            else:
+                r.returncode, r.stdout = 0, self._creds("live", 5)
+            return r
+
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        with patch("claude_telemetry.collector.sys") as fake_sys, \
+                patch("claude_telemetry.collector.subprocess.run", side_effect=fake_run):
+            fake_sys.platform = "darwin"
+            sources = _oauth_credential_sources(tmp_path)
+
+        assert [cmd[-1] for cmd in calls if cmd[1] == "find-generic-password"] == [
+            "Claude Code-credentials", "Claude Code-credentials-2143f80a",
+        ]
+        assert sources == [("keychain:Claude Code-credentials-2143f80a", self._creds("live", 5))]
+
+    def test_notes_explain_every_empty_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(cmd, **_kw):
+            r = MagicMock()
+            if cmd[1] == "dump-keychain":
+                r.returncode, r.stdout = 0, ""
+            else:
+                r.returncode, r.stdout = 44, ""
+                r.stderr = "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain."
+            return r
+
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        notes: list[str] = []
+        with patch("claude_telemetry.collector.sys") as fake_sys, \
+                patch("claude_telemetry.collector.subprocess.run", side_effect=fake_run):
+            fake_sys.platform = "darwin"
+            assert _read_oauth_token(tmp_path, notes) is None
+        joined = " | ".join(notes)
+        assert "no Claude Code-credentials-<hash> items" in joined
+        assert "keychain 'Claude Code-credentials': rc=44" in joined and "could not be found" in joined
+        assert f"no {tmp_path / '.credentials.json'}" in joined
+
+    def test_reads_credentials_file_under_config_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cfg = tmp_path / "profile"
+        cfg.mkdir()
+        (cfg / ".credentials.json").write_text(self._creds("filetok", 9))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+        with patch("claude_telemetry.collector.sys") as fake_sys:
+            fake_sys.platform = "linux"
+            sources = _oauth_credential_sources(tmp_path)
+        assert (f"file:{cfg / '.credentials.json'}", self._creds("filetok", 9)) in sources

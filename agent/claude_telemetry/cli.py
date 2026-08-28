@@ -882,7 +882,11 @@ def doctor() -> None:
     feed = _read_statusline_rate_limit(config.get("claude_data_dir") if config else None)
     if feed:
         five, week = feed.get("five_hour_pct"), feed.get("seven_day_pct")
-        feed_detail, feed_hint = f"5h {five}% · weekly {week}%", ""
+
+        def _pct(v: object) -> str:
+            return f"{v:.0f}%" if isinstance(v, (int, float)) else f"{v}%"
+
+        feed_detail, feed_hint = f"5h {_pct(five)} · weekly {_pct(week)}", ""
     elif not feed_path.exists():
         feed_detail = ""
         feed_hint = (f"{feed_path} does not exist — the statusline script has never run. "
@@ -934,7 +938,8 @@ def doctor() -> None:
     if ml_ok:
         gauges = (" · ".join(f"{k.title()} {v.get('pct')}%" for k, v in model_limits.items())
                   if model_limits else "no model-scoped limits on this account")
-        ml_detail = f"{gauges} (fetched {_ago(ml_fetched)})"
+        src = ml_cache.get("token_source")
+        ml_detail = f"{gauges} (fetched {_ago(ml_fetched)}" + (f", token from {src})" if src else ")")
     else:
         reason = ml_cache.get("last_error") or "failed (reason not recorded — agent older than 0.3.8)"
         ml_hint = f"last success {_ago(ml_fetched)}, last attempt {_ago(ml_attempted)}: {reason}"
