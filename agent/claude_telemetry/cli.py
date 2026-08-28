@@ -850,36 +850,51 @@ def doctor() -> None:
     else:
         _check("Dashboard reachable", False, hint="Fix config first")
 
-    # 5. Statusline — is a statusLine command wired at all, and is it OURS?
-    # Any statusline tool satisfies the bare key while never writing the JSONL
-    # feed we read, so a machine could pass this check and still report no rate
-    # limits at all. Name the conflict instead of green-lighting it.
-    settings_path = Path.home() / ".claude" / "settings.json"
-    statusline_cmd = ""
-    if settings_path.exists():
-        try:
-            s = json.loads(settings_path.read_text())
-            statusline_cmd = str((s.get("statusLine") or {}).get("command") or "")
-        except Exception:
-            pass
-    ours = "statusline.sh" in statusline_cmd or "statusline.ps1" in statusline_cmd
-    _check("Statusline configured", ours,
-           "cc-telemetry statusline",
-           f"Another statusline is set ({statusline_cmd}) — it does not write the "
-           f"rate-limit feed. Run: cc-telemetry setup-statusline"
-           if statusline_cmd else "Run: cc-telemetry setup-statusline")
-
-    # 5b. The feed itself — what collect_rate_limits actually reads. Two very
-    # different failures hide behind "no readings", so separate them: an absent
-    # or empty file means the statusline script never ran (restart Claude Code),
-    # while a file full of records that carry no rate_limits means Claude Code
-    # is running but isn't reporting usage at all — too old to send it, or an
-    # account/plan the API doesn't report for. Only the first is fixable here.
+    # The feed is what collect_rate_limits actually reads; both statusline
+    # checks below are judged against it.
     from .collector import _read_statusline_rate_limit
     claude_dir = Path(config.get("claude_data_dir") or (Path.home() / ".claude")) if config \
         else Path.home() / ".claude"
     feed_path = claude_dir / "statusline.jsonl"
     feed = _read_statusline_rate_limit(config.get("claude_data_dir") if config else None)
+    feed_ts = feed.get("record_ts") if feed else None
+    feed_ts = float(feed_ts) if isinstance(feed_ts, (int, float)) else None
+
+    # 5. Statusline — is a statusLine command wired at all, and does it feed us?
+    # Any statusline tool satisfies the bare key while never writing the JSONL
+    # feed we read, so a machine could pass this check and still report no rate
+    # limits at all. Name the conflict instead of green-lighting it — unless the
+    # feed proves the foreign command does write it (a custom HUD that chains
+    # our script, as on 성민's machine): a record newer than the current
+    # settings.json, or from the last day, can only have come from that command.
+    # Telling such a user to run setup-statusline would clobber their HUD.
+    settings_path = Path.home() / ".claude" / "settings.json"
+    statusline_cmd = ""
+    settings_mtime = 0.0
+    if settings_path.exists():
+        try:
+            s = json.loads(settings_path.read_text())
+            statusline_cmd = str((s.get("statusLine") or {}).get("command") or "")
+            settings_mtime = settings_path.stat().st_mtime
+        except Exception:
+            pass
+    ours = "statusline.sh" in statusline_cmd or "statusline.ps1" in statusline_cmd
+    foreign_feeds = bool(statusline_cmd) and not ours and feed_ts is not None and (
+        feed_ts >= settings_mtime or time.time() - feed_ts < 86400
+    )
+    _check("Statusline configured", ours or foreign_feeds,
+           "cc-telemetry statusline" if ours
+           else f"custom statusline ({statusline_cmd.split('/')[-1]}) — it writes the feed, leave it",
+           f"Another statusline is set ({statusline_cmd}) — it does not write the "
+           f"rate-limit feed. Run: cc-telemetry setup-statusline"
+           if statusline_cmd else "Run: cc-telemetry setup-statusline")
+
+    # 5b. The feed itself. Two very different failures hide behind "no
+    # readings", so separate them: an absent or empty file means the statusline
+    # script never ran (restart Claude Code), while a file full of records that
+    # carry no rate_limits means Claude Code is running but isn't reporting
+    # usage at all — too old to send it, or an account/plan the API doesn't
+    # report for. Only the first is fixable here.
     if feed:
         five, week = feed.get("five_hour_pct"), feed.get("seven_day_pct")
 
