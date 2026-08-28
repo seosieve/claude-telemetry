@@ -568,7 +568,10 @@ def _fetch_oauth_model_limits(
         token_source = cred["source"]
         break
     if data is None:
-        return _fail("every token rejected — " + "; ".join(rejected))
+        # Sources that could not be read at all belong in this verdict too —
+        # "the only readable token is dead" reads very differently from "the
+        # only token is dead" when a second item timed out on a prompt.
+        return _fail("every token rejected — " + "; ".join(rejected + notes))
     if not isinstance(data, dict):
         return _fail("unexpected response shape")
 
