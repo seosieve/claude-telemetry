@@ -10,7 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -986,7 +986,6 @@ def doctor() -> None:
         # read as "that profile is stale, and the live one is not in the
         # Keychain" rather than as a dead end. Attributes only — no secrets.
         from .collector import _read_oauth_tokens
-        from datetime import datetime, timezone
         for cred in _read_oauth_tokens(claude_dir):
             exp = cred.get("expires") or 0
             exp_s = (datetime.fromtimestamp(exp, timezone.utc).strftime("%m-%d %H:%MZ")
