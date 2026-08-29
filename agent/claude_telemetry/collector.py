@@ -286,6 +286,63 @@ def _read_statusline_rate_limit(
 _OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _OAUTH_CACHE_TTL = 900  # weekly gauges move slowly — refetch after 15 min
 _OAUTH_RETRY_INTERVAL = 300  # after a failed attempt, back off for 5 min
+_WEEK_SECONDS = 7 * 86400
+_ANCHOR_TOLERANCE = 600  # weekly resets sit on the hour; entries of one account differ by <1s
+
+
+def _own_profile_service(claude_dir: os.PathLike[str] | str | None = None) -> str:
+    """The Keychain service name Claude Code uses for the profile we watch.
+
+    The default config dir (~/.claude) keeps its credentials under the
+    documented "Claude Code-credentials"; a CLAUDE_CONFIG_DIR profile gets
+    "Claude Code-credentials-<sha256(dir)[:8]>" — undocumented, but verified
+    2026-08-29: the item written by ~/.claude-max5 carried exactly that
+    suffix. The path is hashed as configured (not resolved), since that is
+    the string Claude Code sees.
+    """
+    import hashlib
+    from pathlib import Path
+
+    default = Path.home() / ".claude"
+    path = Path(claude_dir) if claude_dir else default
+    try:
+        is_default = path.resolve() == default.resolve()
+    except OSError:
+        is_default = path == default
+    if is_default:
+        return "Claude Code-credentials"
+    return "Claude Code-credentials-" + hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:8]
+
+
+def _account_weekly_reset(body: dict) -> float | None:
+    """The account-wide weekly reset in a usage-API response, as epoch seconds."""
+    for entry in body.get("limits") or []:
+        if isinstance(entry, dict) and entry.get("kind") == "weekly_all":
+            ts = _parse_iso_utc(entry.get("resets_at"))
+            if ts is not None:
+                return ts
+    seven = body.get("seven_day")
+    return _parse_iso_utc(seven.get("resets_at")) if isinstance(seven, dict) else None
+
+
+def _same_weekly_anchor(a: float, b: float) -> bool:
+    """Whether two weekly reset times can belong to the same account.
+
+    Weekly limits reset at a fixed weekday+time assigned per account, so two
+    readings of one account differ by a whole number of weeks (the newest
+    statusline record may predate a reset the API has already rolled past)
+    plus at most a second of jitter between its entries. Two accounts land
+    hours apart — or on the same anchor, in which case nothing here can tell
+    them apart and nothing here needs to.
+    """
+    rem = abs(a - b) % _WEEK_SECONDS
+    return min(rem, _WEEK_SECONDS - rem) <= _ANCHOR_TOLERANCE
+
+
+def _weekday_label(ts: float) -> str:
+    """A weekly anchor as "Sun 03:00Z" — rounded to the minute, since the
+    API's entries carry sub-second jitter (02:59:59.79) around the hour."""
+    return datetime.fromtimestamp(round(ts / 60) * 60, timezone.utc).strftime("%a %H:%MZ")
 
 
 def _oauth_credential_sources(
@@ -295,7 +352,10 @@ def _oauth_credential_sources(
     """Every place Claude Code may keep its credentials.
 
     Each entry: {"source": label, "raw": JSON text, "acct": Keychain account or
-    None, "mdat": Keychain modification time (ISO) or None}.
+    None, "mdat": Keychain modification time (ISO) or None, and either
+    "service": the Keychain service name or "dir": the config dir the
+    .credentials.json came from} — the last two let _read_oauth_tokens tell
+    the profile this agent watches from every other profile on the machine.
 
     macOS: the documented Keychain item is "Claude Code-credentials", but
     "Claude Code-credentials-<hash>" items exist too (one per profile / config
@@ -364,7 +424,7 @@ def _oauth_credential_sources(
                 continue
             if result.returncode == 0 and result.stdout.strip():
                 sources.append({"source": label, "raw": result.stdout.strip(),
-                                "acct": acct, "mdat": mdat_iso})
+                                "acct": acct, "mdat": mdat_iso, "service": name})
             else:
                 msg = (result.stderr or "").strip().splitlines()
                 _note(f"{label}: rc={result.returncode}" + (f" {msg[-1]}" if msg else ""))
@@ -374,7 +434,7 @@ def _oauth_credential_sources(
         path = Path(d) / ".credentials.json"
         try:
             sources.append({"source": f"file:{path}", "raw": path.read_text(encoding="utf-8"),
-                            "acct": None, "mdat": None})
+                            "acct": None, "mdat": None, "dir": d})
         except OSError:
             _note(f"no {path}")
     return sources
@@ -384,16 +444,28 @@ def _read_oauth_tokens(
     claude_dir: os.PathLike[str] | str | None = None,
     notes: list[str] | None = None,
 ) -> list[dict]:
-    """Every Claude Code OAuth access token on this machine, likeliest-live first.
+    """Every Claude Code OAuth access token on this machine, likeliest-right first.
 
     Each entry: {"token", "source", "expires" (epoch s or 0), "subscription",
-    "scopes", "acct", "mdat"}. Claude Code keeps only the profile actually in
-    use refreshed, so the latest expiresAt is the best first guess — but a
-    profile signed out elsewhere, or signed into a Console/API-key account,
-    can carry an unexpired token the usage API still rejects, so callers try
-    the list in order rather than trusting the first entry. A missing token
-    is not an error — the caller just skips this cycle.
+    "tier" (rateLimitTier), "scopes", "acct", "mdat", "own"}.
+
+    Order: the profile this agent watches (`own` — the Keychain item or
+    .credentials.json belonging to claude_dir) first, then the rest by
+    expiresAt, latest first. Own-first because every other figure on the row
+    (statusline %, ccusage cost) comes from that profile, so its account is
+    the one the model gauges must describe: on 2026-08-29 a second account
+    signed in under ~/.claude-max5 had the fresher token, the usage API
+    happily accepted it, and the fleet's Fable gauge showed that account's 6%
+    while the shared one sat at 82%. Freshest-first only ever told a live
+    token from a dead one. The other profiles stay in the list: a profile
+    signed out elsewhere can carry an unexpired token the usage API rejects,
+    so callers try in order rather than trusting the first entry. A missing
+    token is not an error — the caller just skips this cycle.
     """
+    from pathlib import Path
+
+    own_service = _own_profile_service(claude_dir)
+    own_dir = str(Path(claude_dir) if claude_dir else Path.home() / ".claude")
     found: list[dict] = []
     for src in _oauth_credential_sources(claude_dir, notes):
         try:
@@ -413,11 +485,14 @@ def _read_oauth_tokens(
             "source": src["source"],
             "expires": float(expires) / 1000 if isinstance(expires, (int, float)) else 0.0,
             "subscription": oauth.get("subscriptionType"),
+            "tier": oauth.get("rateLimitTier"),
             "scopes": oauth.get("scopes") if isinstance(oauth.get("scopes"), list) else None,
             "acct": src.get("acct"),
             "mdat": src.get("mdat"),
+            "own": src.get("service") == own_service
+                   or (bool(src.get("dir")) and str(Path(src["dir"])) == own_dir),
         })
-    found.sort(key=lambda c: c["expires"], reverse=True)
+    found.sort(key=lambda c: (not c["own"], -c["expires"]))
     return found
 
 
@@ -463,6 +538,7 @@ def _current_model_limits(cache: dict, now: float) -> dict | None:
 
 def _fetch_oauth_model_limits(
     claude_dir: os.PathLike[str] | str | None = None,
+    expected_weekly_reset: float | None = None,
 ) -> dict | None:
     """Per-model weekly gauges (e.g. Fable's 50% cap) from the OAuth usage API.
 
@@ -476,6 +552,14 @@ def _fetch_oauth_model_limits(
     window (see _current_model_limits), and every entry carries the time it
     was actually read as `fetched_at`, so the dashboard can rank readings by
     their own age instead of by the row they happen to ride on.
+
+    `expected_weekly_reset` is the account-wide weekly reset the statusline
+    feed reports (epoch seconds) — i.e. the account the rest of the row
+    describes. A token whose usage response resets on a different anchor
+    belongs to another account signed in on this machine, and is skipped
+    like a rejected one; when every readable token mismatches the fetch
+    fails (cached in-window reading kept, `last_error` says which account
+    each token is) rather than publish a gauge for the wrong account.
 
     Failures are recorded in the cache as `last_error` (shown by
     `cc-telemetry doctor`) and logged — a machine that silently never fetches
@@ -530,13 +614,18 @@ def _fetch_oauth_model_limits(
     import urllib.error
     import urllib.request
 
-    # A token the usage API rejects (401/403) is a stale or wrong-account
-    # profile, not a dead end: the live session's token is usually the next
-    # candidate. Anything else (429, 5xx, network) is about the endpoint, so
-    # stop and back off rather than burn the remaining candidates on it.
+    # A token the usage API rejects (401/403) is a stale profile, and one
+    # whose weekly reset sits on another anchor is a different account's —
+    # neither is a dead end: the profile this agent watches is tried first,
+    # and the live session's token is usually the next candidate. Anything
+    # else (429, 5xx, network) is about the endpoint, so stop and back off
+    # rather than burn the remaining candidates on it.
     data = None
     token_source = ""
+    token_tier = None
+    anchor: float | None = None
     rejected: list[str] = []
+    mismatched: list[str] = []
     for cred in creds:
         req = urllib.request.Request(
             _OAUTH_USAGE_URL,
@@ -547,7 +636,7 @@ def _fetch_oauth_model_limits(
         )
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                body = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 rejected.append(f"HTTP {e.code} for {cred['source']}")
@@ -557,15 +646,31 @@ def _fetch_oauth_model_limits(
             return _fail(f"network: {e.reason}")
         except (OSError, json.JSONDecodeError, TimeoutError) as e:
             return _fail(f"{type(e).__name__}: {e}")
-        token_source = cred["source"]
+        if not isinstance(body, dict):
+            return _fail("unexpected response shape")
+        anchor = _account_weekly_reset(body)
+        if (
+            expected_weekly_reset is not None
+            and anchor is not None
+            and not _same_weekly_anchor(anchor, expected_weekly_reset)
+        ):
+            mismatched.append(
+                f"{cred['source']} is {cred.get('tier') or cred.get('subscription') or 'unknown plan'}"
+                f", weekly resets {_weekday_label(anchor)}"
+            )
+            continue
+        data, token_source, token_tier = body, cred["source"], cred.get("tier")
         break
     if data is None:
         # Sources that could not be read at all belong in this verdict too —
         # "the only readable token is dead" reads very differently from "the
         # only token is dead" when a second item timed out on a prompt.
+        if mismatched and expected_weekly_reset is not None:
+            return _fail(
+                f"account mismatch — statusline weekly resets {_weekday_label(expected_weekly_reset)}"
+                " but " + "; ".join(mismatched + rejected + notes)
+            )
         return _fail("every token rejected — " + "; ".join(rejected + notes))
-    if not isinstance(data, dict):
-        return _fail("unexpected response shape")
 
     read_at = datetime.fromtimestamp(now, timezone.utc).isoformat()
     scoped: dict = {}
@@ -582,8 +687,13 @@ def _fetch_oauth_model_limits(
             "fetched_at": read_at,
         }
     result = scoped or None
-    _save({"fetched_at": now, "attempted_at": now, "model_limits": result,
-           "last_error": None, "token_source": token_source})
+    _save({
+        "fetched_at": now, "attempted_at": now, "model_limits": result,
+        "last_error": None, "token_source": token_source, "token_tier": token_tier,
+        "account_weekly_reset": (
+            datetime.fromtimestamp(anchor, timezone.utc).isoformat() if anchor is not None else None
+        ),
+    })
     return result
 
 
@@ -680,12 +790,19 @@ def collect_rate_limits(
     """
     now = datetime.now(timezone.utc)
 
+    sl = _read_statusline_rate_limit(claude_dir)
+
     # Model-scoped weekly gauges (Fable 50% cap etc.) only exist on the OAuth
     # usage API — neither statusline nor ccost carries them. Best-effort:
-    # None simply leaves the column empty.
-    model_limits = _fetch_oauth_model_limits(claude_dir)
+    # None simply leaves the column empty. The statusline's weekly reset is
+    # the account the rest of this row describes; the fetch uses it to skip
+    # tokens of any other account signed in on this machine.
+    expected = sl.get("seven_day_reset") if sl else None
+    model_limits = _fetch_oauth_model_limits(
+        claude_dir,
+        expected_weekly_reset=float(expected) if isinstance(expected, (int, float)) else None,
+    )
 
-    sl = _read_statusline_rate_limit(claude_dir)
     if sl is not None:
         # Stamp the row with the statusline record's own time, not the sync
         # time. A daemon re-sync on an idle machine would otherwise launder an

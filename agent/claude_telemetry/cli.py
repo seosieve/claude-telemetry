@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -925,8 +926,12 @@ def doctor() -> None:
     # the verdict is live, then read what it recorded: on success fetched_at
     # and attempted_at coincide; on failure attempted_at moves on alone and
     # last_error names the reason.
-    from .collector import _fetch_oauth_model_limits
-    model_limits = _fetch_oauth_model_limits(claude_dir)
+    from .collector import _fetch_oauth_model_limits, _weekday_label
+    feed_reset = feed.get("seven_day_reset") if feed else None
+    model_limits = _fetch_oauth_model_limits(
+        claude_dir,
+        expected_weekly_reset=float(feed_reset) if isinstance(feed_reset, (int, float)) else None,
+    )
     ml_cache: dict = {}
     try:
         loaded = json.loads((claude_dir / ".cc-telemetry-model-limits.json").read_text(encoding="utf-8"))
@@ -954,11 +959,24 @@ def doctor() -> None:
         gauges = (" · ".join(f"{k.title()} {v.get('pct')}%" for k, v in model_limits.items())
                   if model_limits else "no model-scoped limits on this account")
         src = ml_cache.get("token_source")
-        ml_detail = f"{gauges} (fetched {_ago(ml_fetched)}" + (f", token from {src})" if src else ")")
+        tier = ml_cache.get("token_tier")
+        anchor = ml_cache.get("account_weekly_reset")
+        try:
+            anchor = _weekday_label(datetime.fromisoformat(anchor).timestamp()) if anchor else None
+        except ValueError:
+            anchor = None
+        ml_detail = f"{gauges} (fetched {_ago(ml_fetched)}" + (
+            f", token from {src}" + (f" [{tier}]" if tier else "")
+            + (f", weekly resets {anchor}" if anchor else "") + ")" if src else ")"
+        )
     else:
         reason = ml_cache.get("last_error") or "failed (reason not recorded — agent older than 0.3.8)"
         ml_hint = f"last success {_ago(ml_fetched)}, last attempt {_ago(ml_attempted)}: {reason}"
-        if "no OAuth token" in reason or "HTTP 401" in reason or "HTTP 403" in reason:
+        if "account mismatch" in reason:
+            ml_hint += (" — every readable token belongs to a different account than the one "
+                        f"Claude Code runs as here; sign into that account in `claude` under "
+                        f"{claude_dir}, then re-run doctor")
+        elif "no OAuth token" in reason or "HTTP 401" in reason or "HTTP 403" in reason:
             ml_hint += " — run `claude` and sign in with the subscription account, then re-run doctor"
         elif "HTTP 429" in reason:
             ml_hint += " — rate-limited by the usage API, re-run doctor in a few minutes"
@@ -977,8 +995,9 @@ def doctor() -> None:
             scopes = cred.get("scopes") or []
             click.echo(f"        · {cred['source']}: expires {exp_s}"
                        + (f", modified {mdat}Z" if mdat else "")
-                       + f", plan {cred.get('subscription') or '?'}"
-                       + (", no user:profile scope" if scopes and "user:profile" not in scopes else ""))
+                       + f", plan {cred.get('tier') or cred.get('subscription') or '?'}"
+                       + (", no user:profile scope" if scopes and "user:profile" not in scopes else "")
+                       + (" ← this agent's profile" if cred.get("own") else ""))
 
     # 6. Hooks
     hooks_ok = False

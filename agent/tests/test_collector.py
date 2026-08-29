@@ -14,7 +14,9 @@ from claude_telemetry.collector import (
     trim_statusline_log,
     _fetch_oauth_model_limits,
     _oauth_credential_sources,
+    _own_profile_service,
     _read_oauth_tokens,
+    _same_weekly_anchor,
     _detect_subagent,
     _session_id_to_project,
     CollectorError,
@@ -227,6 +229,23 @@ class TestCollectRateLimits:
         assert result[0].weekly_reset_at is not None
 
     @patch("claude_telemetry.collector._read_statusline_rate_limit")
+    def test_hands_the_statusline_weekly_reset_to_the_oauth_fetch(self, mock_sl: MagicMock) -> None:
+        mock_sl.return_value = {
+            "five_hour_pct": 1, "seven_day_pct": 2, "five_hour_reset": 1781086200,
+            "seven_day_reset": 1781406000, "session_cost": None, "record_ts": 1781080000,
+        }
+        with patch("claude_telemetry.collector._fetch_oauth_model_limits", return_value=None) as fetch:
+            collect_rate_limits()
+        fetch.assert_called_once_with(None, expected_weekly_reset=1781406000.0)
+
+    @patch("claude_telemetry.collector._read_statusline_rate_limit", return_value=None)
+    @patch("claude_telemetry.collector._find_ccost", side_effect=FileNotFoundError)
+    def test_without_a_feed_the_fetch_gets_no_anchor(self, _find: MagicMock, _sl: MagicMock) -> None:
+        with patch("claude_telemetry.collector._fetch_oauth_model_limits", return_value=None) as fetch:
+            collect_rate_limits()
+        fetch.assert_called_once_with(None, expected_weekly_reset=None)
+
+    @patch("claude_telemetry.collector._read_statusline_rate_limit")
     def test_statusline_row_stamped_with_reading_time(self, mock_sl: MagicMock) -> None:
         # The row must carry the statusline record's own time, not the sync
         # time — otherwise an idle machine's daemon re-sync launders an old
@@ -426,6 +445,100 @@ class TestFetchOauthModelLimits:
         assert json.loads(cache.read_text())["last_error"] == \
             "every token rejected — HTTP 401 for keychain:A; HTTP 401 for file:B"
 
+    SUN = "2026-08-30T03:00:00+00:00"  # the shared account's weekly anchor
+    THU = "2026-09-03T15:00:00+00:00"  # the side account's
+
+    @staticmethod
+    def _usage(weekly_all: str, fable_pct: int) -> bytes:
+        return json.dumps({"limits": [
+            {"kind": "weekly_all", "percent": 50, "resets_at": weekly_all, "scope": None},
+            {"kind": "weekly_scoped", "percent": fable_pct, "resets_at": weekly_all,
+             "scope": {"model": {"display_name": "Fable"}}},
+        ]}).encode()
+
+    def _two_accounts(self):
+        # Own profile first (as _read_oauth_tokens orders them), but its token
+        # is on the *other* account — e.g. ~/.claude signed into the side one.
+        creds = [
+            {"token": "side", "source": "keychain:Claude Code-credentials", "expires": 2.0,
+             "tier": "default_claude_max_5x"},
+            {"token": "main", "source": "keychain:Claude Code-credentials-2143f80a", "expires": 1.0,
+             "tier": "default_claude_max_20x"},
+        ]
+        bodies = {"Bearer side": self._usage(self.THU, 6), "Bearer main": self._usage(self.SUN, 82)}
+        used: list[str] = []
+
+        def fake_urlopen(req, timeout=0):
+            used.append(req.get_header("Authorization"))
+            resp = MagicMock()
+            resp.__enter__.return_value.read.return_value = bodies[req.get_header("Authorization")]
+            return resp
+
+        return creds, fake_urlopen, used
+
+    def test_token_of_another_account_is_skipped_by_its_weekly_anchor(self, tmp_path: Path) -> None:
+        # 2026-08-29: the Max 5x profile's token was accepted by the usage API
+        # and its 6% Fable displaced the shared account's 82% fleet-wide.
+        cache = self._seed(tmp_path, resets_at=self.PAST)
+        creds, fake_urlopen, used = self._two_accounts()
+        expected = datetime.fromisoformat(self.SUN).timestamp()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+
+        assert used == ["Bearer side", "Bearer main"]
+        assert result is not None and result["fable"]["pct"] == 82
+        saved = json.loads(cache.read_text())
+        assert saved["token_source"] == "keychain:Claude Code-credentials-2143f80a"
+        assert saved["token_tier"] == "default_claude_max_20x"
+        assert saved["account_weekly_reset"] == self.SUN
+        assert saved["last_error"] is None
+
+    def test_every_token_on_another_account_fails_and_names_them(self, tmp_path: Path) -> None:
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
+        creds, fake_urlopen, _ = self._two_accounts()
+        expected = datetime.fromisoformat("2026-08-31T15:00:00+00:00").timestamp()  # a third anchor
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+
+        assert result is not None and result["fable"]["pct"] == 100  # in-window cache, not a wrong account
+        saved = json.loads(cache.read_text())
+        assert saved["last_error"] == (
+            "account mismatch — statusline weekly resets Mon 15:00Z but "
+            "keychain:Claude Code-credentials is default_claude_max_5x, weekly resets Thu 15:00Z; "
+            "keychain:Claude Code-credentials-2143f80a is default_claude_max_20x, weekly resets Sun 03:00Z"
+        )
+        assert saved["attempted_at"] > saved["fetched_at"]
+
+    def test_statusline_anchor_from_last_week_still_matches(self, tmp_path: Path) -> None:
+        # An idle machine's newest statusline record predates the reset the
+        # API has already rolled past: same account, one week apart.
+        self._seed(tmp_path, resets_at=self.PAST)
+        creds, fake_urlopen, used = self._two_accounts()
+        expected = datetime.fromisoformat(self.SUN).timestamp() - 7 * 86400 + 0.9
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=[creds[1]]), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+        assert used == ["Bearer main"]
+        assert result is not None and result["fable"]["pct"] == 82
+
+    def test_without_a_statusline_anchor_the_first_accepted_token_wins(self, tmp_path: Path) -> None:
+        self._seed(tmp_path, resets_at=self.PAST)
+        creds, fake_urlopen, used = self._two_accounts()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path)
+        assert used == ["Bearer side"]
+        assert result is not None and result["fable"]["pct"] == 6
+
+    def test_same_weekly_anchor(self) -> None:
+        sun = datetime.fromisoformat(self.SUN).timestamp()
+        assert _same_weekly_anchor(sun, sun - 0.075)  # scoped vs all entry jitter
+        assert _same_weekly_anchor(sun, sun - 3 * 7 * 86400)  # three weeks of idle statusline
+        assert not _same_weekly_anchor(sun, datetime.fromisoformat(self.THU).timestamp())
+        assert not _same_weekly_anchor(sun, sun + 3600)  # the next hour is another account
+
     @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[{"token": "tok", "source": "keychain:test", "expires": 0}])
     def test_success_stamps_fetched_at_and_clears_error(self, _tok: MagicMock, tmp_path: Path) -> None:
         cache = self._seed(tmp_path, resets_at=self.PAST)
@@ -471,21 +584,44 @@ class TestReadOauthToken:
     def _creds(token: str, expires_ms: int) -> str:
         return json.dumps({"claudeAiOauth": {"accessToken": token, "expiresAt": expires_ms}})
 
-    def test_picks_the_token_with_the_latest_expiry(self) -> None:
-        # A CLAUDE_CONFIG_DIR profile beside a stale default-dir item: only the
-        # profile in use gets refreshed, so its expiresAt is the later one.
-        sources = [
-            {"source": "keychain:Claude Code-credentials", "raw": self._creds("stale", 1_000)},
-            {"source": "keychain:Claude Code-credentials-2143f80a", "raw": self._creds("live", 2_000)},
-            {"source": "file:/x/.credentials.json", "raw": "not json"},
-        ]
-        with patch("claude_telemetry.collector._oauth_credential_sources", return_value=sources):
+    SOURCES = [
+        {"source": "keychain:Claude Code-credentials", "service": "Claude Code-credentials",
+         "raw": json.dumps({"claudeAiOauth": {"accessToken": "main", "expiresAt": 1_000,
+                                              "rateLimitTier": "default_claude_max_20x"}})},
+        {"source": "keychain:Claude Code-credentials-2143f80a", "service": "Claude Code-credentials-2143f80a",
+         "raw": json.dumps({"claudeAiOauth": {"accessToken": "side", "expiresAt": 2_000,
+                                              "rateLimitTier": "default_claude_max_5x"}})},
+        {"source": "file:/x/.credentials.json", "raw": "not json"},
+    ]
+
+    def test_own_profile_first_then_the_latest_expiry(self) -> None:
+        # Sieve's machine, 2026-08-29: a second account under ~/.claude-max5 had
+        # the fresher token. The agent watches ~/.claude, so that item leads
+        # regardless — but the other stays available as a fallback.
+        with patch("claude_telemetry.collector._oauth_credential_sources", return_value=self.SOURCES), \
+                patch("claude_telemetry.collector._own_profile_service", return_value="Claude Code-credentials"):
             creds = _read_oauth_tokens()
-        # likeliest-live first, but every token stays available for the fetch to try
-        assert [(c["token"], c["source"]) for c in creds] == [
-            ("live", "keychain:Claude Code-credentials-2143f80a"),
-            ("stale", "keychain:Claude Code-credentials"),
+        assert [(c["token"], c["own"], c["tier"]) for c in creds] == [
+            ("main", True, "default_claude_max_20x"),
+            ("side", False, "default_claude_max_5x"),
         ]
+
+    def test_a_profile_dir_leads_with_its_own_hashed_item(self) -> None:
+        with patch("claude_telemetry.collector._oauth_credential_sources", return_value=self.SOURCES):
+            creds = _read_oauth_tokens("/Users/seosieve/.claude-max5")
+        assert [(c["token"], c["own"]) for c in creds] == [("side", True), ("main", False)]
+
+    def test_without_an_own_item_the_freshest_leads(self) -> None:
+        with patch("claude_telemetry.collector._oauth_credential_sources", return_value=self.SOURCES), \
+                patch("claude_telemetry.collector._own_profile_service", return_value="Claude Code-credentials-ffffffff"):
+            creds = _read_oauth_tokens()
+        assert [c["token"] for c in creds] == ["side", "main"]
+
+    def test_keychain_item_name_per_profile_dir(self) -> None:
+        # Verified against the item ~/.claude-max5 actually writes (2026-08-29).
+        assert _own_profile_service("/Users/seosieve/.claude-max5") == "Claude Code-credentials-2143f80a"
+        assert _own_profile_service(Path.home() / ".claude") == "Claude Code-credentials"
+        assert _own_profile_service(None) == "Claude Code-credentials"
 
     def test_none_when_no_source_has_a_token(self) -> None:
         sources = [{"source": "keychain:Claude Code-credentials", "raw": json.dumps({"claudeAiOauth": {}})}]
@@ -589,4 +725,4 @@ class TestReadOauthToken:
             fake_sys.platform = "linux"
             sources = _oauth_credential_sources(tmp_path)
         assert {"source": f"file:{cfg / '.credentials.json'}", "raw": self._creds("filetok", 9),
-                "acct": None, "mdat": None} in sources
+                "acct": None, "mdat": None, "dir": str(cfg)} in sources
