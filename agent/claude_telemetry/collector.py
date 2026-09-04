@@ -542,6 +542,36 @@ def _current_model_limits(cache: dict, now: float) -> dict | None:
     return live or None
 
 
+def _scoped_gauges(body: dict, read_at: str) -> tuple[dict, int]:
+    """The publishable weekly_scoped gauges in a usage response, and how many
+    were dropped for carrying no window of their own.
+
+    A gauge without a resets_at is not a reading of this week — the API opens
+    a window on the first call against it — so it is never published. The
+    count separates "this account has no model-scoped limits" (nothing to
+    drop, a legitimate empty answer) from "every gauge it has is windowless"
+    (the account has not called this week; the caller tries another token).
+    """
+    scoped: dict = {}
+    dropped = 0
+    for entry in body.get("limits") or []:
+        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
+            continue
+        model = ((entry.get("scope") or {}).get("model")) or {}
+        name = model.get("display_name")
+        if not name or entry.get("percent") is None:
+            continue
+        if _parse_iso_utc(entry.get("resets_at")) is None:
+            dropped += 1
+            continue
+        scoped[str(name).lower()] = {
+            "pct": entry.get("percent"),
+            "resets_at": entry.get("resets_at"),
+            "fetched_at": read_at,
+        }
+    return scoped, dropped
+
+
 def _fetch_oauth_model_limits(
     claude_dir: os.PathLike[str] | str | None = None,
     expected_weekly_reset: float | None = None,
@@ -563,25 +593,41 @@ def _fetch_oauth_model_limits(
     feed reports (epoch seconds) — i.e. the account the rest of the row
     describes. A token whose usage response resets on a different anchor
     belongs to another account signed in on this machine, and is skipped
-    like a rejected one. So is a token whose response has no weekly window
-    at all: the statusline row describes an account with one, so an idle
-    account (no call this week — the API opens the window on first use) is
-    not it. On 2026-09-04 13:09 KST one machine published Fable 0% /
-    resets_at null and displaced the account's 90% on every dashboard for two
-    hours; the likeliest reading of the logs is that its shared-account token
-    had expired overnight (this agent cannot refresh tokens), the loop fell
-    through to a side profile's live token, and that idle account had nothing
-    to compare against the anchor. When every readable token mismatches the
-    fetch fails (cached in-window reading kept, `last_error` says which
-    account each token is) rather than publish a gauge for the wrong account.
-    Should the shared account itself ever answer without a window (a fresh
-    week with no call yet), the column stays empty until the first call —
-    honest, and it fills in on its own. Without a statusline anchor the first
-    accepted token still wins — there is nothing to judge by.
+    like a rejected one.
 
-    A scoped entry without a resets_at is never published either, whichever
-    token it came from: a gauge with no window is not a reading of this week.
-    An empty column is honest, and fills in with the next call on that model.
+    A response with no weekly window is skipped too. The API opens a window
+    on an account's first call of the week, so a windowless response comes
+    from an account that has not called — which the statusline row, being an
+    account with a window, is not. Without a statusline anchor to compare
+    against, the same response is skipped once its gauges are read instead:
+    every one of them windowless means there is nothing here to publish
+    whoever it belongs to. (An account with no model-scoped limits at all is
+    a different answer, and is still accepted.)
+
+    On 2026-09-04 04:09Z one machine published Fable 0% / resets_at null and
+    displaced the shared account's 90% on every dashboard for 76 minutes.
+    The daemon log has no failure for that cycle, so the fetch succeeded and
+    the response itself carried the 0%: the shared-account token had expired
+    overnight (this agent cannot refresh tokens — only running `claude`
+    does), the loop fell through to a side profile's live token, and that
+    account had not called since its own Thursday reset, so it answered with
+    no window and slipped past an anchor check that only compared the
+    windows it could see.
+
+    When nothing readable is left the fetch fails (cached in-window reading
+    kept, `last_error` says what each token was) rather than publish a gauge
+    for the wrong account or for no week at all.
+
+    A scoped entry without a resets_at is never published either (see
+    _scoped_gauges), as a second line of defence should a response carry a
+    window account-wide but not for this model.
+
+    The cost is real but small: the shared account answers without a window
+    too, in the gap between its weekly reset and its first call of the new
+    week (2026-08-30 03:36Z, 36 min after the Sunday reset, was one — the
+    window was open again by 04:19Z). The column stays empty for that gap
+    and fills in on its own; the dashboard reads 0% from the entries whose
+    windows just expired, which is the truth right after a reset.
 
     Failures are recorded in the cache as `last_error` (shown by
     `cc-telemetry doctor`) and logged — a machine that silently never fetches
@@ -642,12 +688,15 @@ def _fetch_oauth_model_limits(
     # and the live session's token is usually the next candidate. Anything
     # else (429, 5xx, network) is about the endpoint, so stop and back off
     # rather than burn the remaining candidates on it.
+    read_at = datetime.fromtimestamp(now, timezone.utc).isoformat()
     data = None
     token_source = ""
     token_tier = None
     anchor: float | None = None
+    scoped: dict = {}
     rejected: list[str] = []
     mismatched: list[str] = []
+    windowless: list[str] = []
     for cred in creds:
         req = urllib.request.Request(
             _OAUTH_USAGE_URL,
@@ -671,44 +720,41 @@ def _fetch_oauth_model_limits(
         if not isinstance(body, dict):
             return _fail("unexpected response shape")
         anchor = _account_weekly_reset(body)
+        plan = cred.get("tier") or cred.get("subscription") or "unknown plan"
         if expected_weekly_reset is not None and (
             anchor is None or not _same_weekly_anchor(anchor, expected_weekly_reset)
         ):
-            plan = cred.get('tier') or cred.get('subscription') or 'unknown plan'
-            mismatched.append(
-                f"{cred['source']} is {plan}, "
-                + ("no weekly window open" if anchor is None else f"weekly resets {_weekday_label(anchor)}")
-            )
+            if anchor is None:
+                windowless.append(f"{cred['source']} is {plan}")
+            else:
+                mismatched.append(
+                    f"{cred['source']} is {plan}, weekly resets {_weekday_label(anchor)}"
+                )
+            continue
+        gauges, dropped = _scoped_gauges(body, read_at)
+        if dropped and not gauges:
+            # Every gauge this account has is windowless, so there is nothing
+            # here to publish whoever it belongs to — try the next token
+            # rather than caching an empty answer over a good reading.
+            windowless.append(f"{cred['source']} is {plan}")
             continue
         data, token_source, token_tier = body, cred["source"], cred.get("tier")
+        scoped = gauges
         break
     if data is None:
         # Sources that could not be read at all belong in this verdict too —
         # "the only readable token is dead" reads very differently from "the
         # only token is dead" when a second item timed out on a prompt.
+        idle = [f"{w}, no weekly window open" for w in windowless]
         if mismatched and expected_weekly_reset is not None:
             return _fail(
                 f"account mismatch — statusline weekly resets {_weekday_label(expected_weekly_reset)}"
-                " but " + "; ".join(mismatched + rejected + notes)
+                " but " + "; ".join(mismatched + idle + rejected + notes)
             )
+        if windowless:
+            return _fail("no weekly window open — " + "; ".join(windowless + rejected + notes))
         return _fail("every token rejected — " + "; ".join(rejected + notes))
 
-    read_at = datetime.fromtimestamp(now, timezone.utc).isoformat()
-    scoped: dict = {}
-    for entry in data.get("limits") or []:
-        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
-            continue
-        model = ((entry.get("scope") or {}).get("model")) or {}
-        name = model.get("display_name")
-        if not name or entry.get("percent") is None:
-            continue
-        if _parse_iso_utc(entry.get("resets_at")) is None:
-            continue  # no window → not a reading of this week; leave the column empty
-        scoped[str(name).lower()] = {
-            "pct": entry.get("percent"),
-            "resets_at": entry.get("resets_at"),
-            "fetched_at": read_at,
-        }
     result = scoped or None
     _save({
         "fetched_at": now, "attempted_at": now, "model_limits": result,

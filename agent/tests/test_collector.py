@@ -591,25 +591,71 @@ class TestFetchOauthModelLimits:
         assert result is not None and result["fable"]["pct"] == 100  # in-window cache, not a 0%
         saved = json.loads(cache.read_text())
         assert saved["last_error"] == (
-            "account mismatch — statusline weekly resets Sun 03:00Z but "
-            "keychain:Claude Code-credentials is default_claude_pro, no weekly window open"
+            "no weekly window open — keychain:Claude Code-credentials is default_claude_pro"
         )
         assert saved["attempted_at"] > saved["fetched_at"]
 
-    def test_without_a_statusline_anchor_an_idle_token_publishes_nothing(self, tmp_path: Path) -> None:
-        # No anchor to judge by, so the first accepted token still wins — but a
-        # gauge without a window is not a reading of any week.
-        cache = self._seed(tmp_path, resets_at=self.PAST)
+    def test_without_a_statusline_anchor_a_windowless_token_falls_through(self, tmp_path: Path) -> None:
+        # A response with no window is not a reading of any week, so there is
+        # nothing to judge and nothing to keep: try the next token instead of
+        # letting "the first accepted token wins" wipe a good cached reading.
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
         creds, fake_urlopen, used = self._idle_then_main()
         with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
                 patch("urllib.request.urlopen", side_effect=fake_urlopen):
             result = _fetch_oauth_model_limits(tmp_path)
 
-        assert used == ["Bearer idle"]
-        assert result is None
+        assert used == ["Bearer idle", "Bearer main"]
+        assert result is not None and result["fable"]["pct"] == 82
+        assert json.loads(cache.read_text())["last_error"] is None
+
+    def test_without_a_statusline_anchor_only_windowless_tokens_keep_the_cache(self, tmp_path: Path) -> None:
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
+        creds, fake_urlopen, _ = self._idle_then_main()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=[creds[0]]), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert result is not None and result["fable"]["pct"] == 100  # in-window cache, not a 0%
         saved = json.loads(cache.read_text())
-        assert saved["model_limits"] is None
-        assert saved["last_error"] is None
+        assert saved["model_limits"]["fable"]["pct"] == 100  # and it is not overwritten with None
+        assert saved["last_error"] == (
+            "no weekly window open — keychain:Claude Code-credentials is default_claude_pro"
+        )
+
+    def test_tokens_failing_for_different_reasons_are_named_separately(self, tmp_path: Path) -> None:
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
+        creds, fake_urlopen, _ = self._idle_then_main()
+        expected = datetime.fromisoformat("2026-08-31T15:00:00+00:00").timestamp()  # a third anchor
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+
+        assert result is not None and result["fable"]["pct"] == 100  # in-window cache
+        assert json.loads(cache.read_text())["last_error"] == (
+            "account mismatch — statusline weekly resets Mon 15:00Z but "
+            "keychain:Claude Code-credentials-2143f80a is default_claude_max_20x, "
+            "weekly resets Sun 03:00Z; "
+            "keychain:Claude Code-credentials is default_claude_pro, no weekly window open"
+        )
+
+    def test_the_shared_account_itself_may_answer_without_a_window(self, tmp_path: Path) -> None:
+        # The accepted cost of the rule: 2026-08-30 03:36Z, 36 min after the
+        # Sunday reset, the shared account answered 0% / resets_at null and
+        # only opened the window by 04:19Z. The column stays empty for that
+        # gap rather than carrying a gauge that belongs to no week — the
+        # dashboard reads 0% from the entries whose windows just expired.
+        cache = self._seed(tmp_path, resets_at=self.SUN)  # last week's, now past
+        creds, fake_urlopen, _ = self._idle_then_main()
+        expected = datetime.fromisoformat(self.SUN).timestamp()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=[creds[0]]), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+
+        assert result is None  # empty column, not 0% with no window
+        assert json.loads(cache.read_text())["last_error"] == (
+            "no weekly window open — keychain:Claude Code-credentials is default_claude_pro"
+        )
 
     @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[{"token": "tok", "source": "keychain:test", "expires": 0}])
     def test_scoped_entry_without_a_window_is_not_published(self, _tok: MagicMock, tmp_path: Path) -> None:
