@@ -132,11 +132,18 @@ CREATE TABLE user_preferences (
     alert_thresholds JSONB DEFAULT '{"daily": 20, "weekly": 100}',
     week_start_day TEXT DEFAULT 'monday',
     theme TEXT DEFAULT 'dark',
+    -- UNUSED since 501adee (2026-09-04): the webhook alerts this configured were
+    -- removed — they had never sent one. Kept so the migrations need not change;
+    -- nothing reads or writes it. Do not build on it without reading that commit.
+    -- (alert_thresholds above is a DIFFERENT, live feature: the in-dashboard cost banner.)
     notifications JSONB DEFAULT '{"webhook_url": null, "webhook_enabled": false, "types": {"project_budget": true, "rate_limit": true}}',
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- ── notification_history (auth.users FK removed) ────────────────────────────
+-- UNUSED since 501adee (2026-09-04) and empty: it logged webhook alerts that were
+-- never sent (no cron caller, no webhook URL, 0 rows in five months), and the code
+-- that wrote it is gone. Kept only to leave the migrations untouched.
 CREATE TABLE notification_history (
     id BIGSERIAL PRIMARY KEY,
     user_id UUID,
