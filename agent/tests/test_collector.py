@@ -532,6 +532,115 @@ class TestFetchOauthModelLimits:
         assert used == ["Bearer side"]
         assert result is not None and result["fable"]["pct"] == 6
 
+    @staticmethod
+    def _idle_usage() -> bytes:
+        # An account that has not made a call this week: the usage API returns
+        # its weekly buckets at 0% with no resets_at, since a window only
+        # opens on first use.
+        return json.dumps({"limits": [
+            {"kind": "weekly_all", "percent": 0, "resets_at": None, "scope": None},
+            {"kind": "weekly_scoped", "percent": 0, "resets_at": None,
+             "scope": {"model": {"display_name": "Fable"}}},
+        ], "seven_day": {"utilization": 0, "resets_at": None}}).encode()
+
+    def _idle_then_main(self):
+        # Own profile's token expired overnight (the agent cannot refresh it),
+        # a side profile's token is live but its account is idle this week.
+        creds = [
+            {"token": "idle", "source": "keychain:Claude Code-credentials", "expires": 2.0,
+             "tier": "default_claude_pro"},
+            {"token": "main", "source": "keychain:Claude Code-credentials-2143f80a", "expires": 1.0,
+             "tier": "default_claude_max_20x"},
+        ]
+        bodies = {"Bearer idle": self._idle_usage(), "Bearer main": self._usage(self.SUN, 82)}
+        used: list[str] = []
+
+        def fake_urlopen(req, timeout=0):
+            used.append(req.get_header("Authorization"))
+            resp = MagicMock()
+            resp.__enter__.return_value.read.return_value = bodies[req.get_header("Authorization")]
+            return resp
+
+        return creds, fake_urlopen, used
+
+    def test_token_without_a_weekly_window_is_skipped_when_the_statusline_has_one(self, tmp_path: Path) -> None:
+        # 충원's machine, 2026-09-04 13:09 KST: an idle side account's token
+        # passed the anchor check (nothing to compare) and its Fable 0% /
+        # resets_at null displaced the shared account's 90% fleet-wide.
+        cache = self._seed(tmp_path, resets_at=self.PAST)
+        creds, fake_urlopen, used = self._idle_then_main()
+        expected = datetime.fromisoformat(self.SUN).timestamp()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+
+        assert used == ["Bearer idle", "Bearer main"]
+        assert result is not None and result["fable"]["pct"] == 82
+        saved = json.loads(cache.read_text())
+        assert saved["token_source"] == "keychain:Claude Code-credentials-2143f80a"
+        assert saved["last_error"] is None
+
+    def test_only_idle_tokens_with_a_statusline_anchor_fail_and_say_so(self, tmp_path: Path) -> None:
+        cache = self._seed(tmp_path, resets_at=self.FUTURE)
+        creds, fake_urlopen, _ = self._idle_then_main()
+        expected = datetime.fromisoformat(self.SUN).timestamp()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=[creds[0]]), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path, expected_weekly_reset=expected)
+
+        assert result is not None and result["fable"]["pct"] == 100  # in-window cache, not a 0%
+        saved = json.loads(cache.read_text())
+        assert saved["last_error"] == (
+            "account mismatch — statusline weekly resets Sun 03:00Z but "
+            "keychain:Claude Code-credentials is default_claude_pro, no weekly window open"
+        )
+        assert saved["attempted_at"] > saved["fetched_at"]
+
+    def test_without_a_statusline_anchor_an_idle_token_publishes_nothing(self, tmp_path: Path) -> None:
+        # No anchor to judge by, so the first accepted token still wins — but a
+        # gauge without a window is not a reading of any week.
+        cache = self._seed(tmp_path, resets_at=self.PAST)
+        creds, fake_urlopen, used = self._idle_then_main()
+        with patch("claude_telemetry.collector._read_oauth_tokens", return_value=creds), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert used == ["Bearer idle"]
+        assert result is None
+        saved = json.loads(cache.read_text())
+        assert saved["model_limits"] is None
+        assert saved["last_error"] is None
+
+    @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[{"token": "tok", "source": "keychain:test", "expires": 0}])
+    def test_scoped_entry_without_a_window_is_not_published(self, _tok: MagicMock, tmp_path: Path) -> None:
+        self._seed(tmp_path, resets_at=self.PAST)
+        body = json.dumps({"limits": [
+            {"kind": "weekly_all", "percent": 40, "resets_at": self.FUTURE, "scope": None},
+            {"kind": "weekly_scoped", "percent": 0, "resets_at": None,
+             "scope": {"model": {"display_name": "Fable"}}},
+            {"kind": "weekly_scoped", "percent": 12, "resets_at": self.FUTURE,
+             "scope": {"model": {"display_name": "Opus"}}},
+        ]}).encode()
+        resp = MagicMock()
+        resp.__enter__.return_value.read.return_value = body
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = _fetch_oauth_model_limits(tmp_path)
+
+        assert result is not None and list(result) == ["opus"]
+        assert result["opus"]["pct"] == 12
+
+    @patch("claude_telemetry.collector._read_oauth_tokens", return_value=[])
+    def test_cached_entry_without_a_window_is_not_served(self, _tok: MagicMock, tmp_path: Path) -> None:
+        # A cache written by an agent before 0.3.14 may hold the 09-04 entry;
+        # served across failures it would zero the fleet gauge again.
+        cache = tmp_path / ".cc-telemetry-model-limits.json"
+        cache.write_text(json.dumps({
+            "fetched_at": 1.0, "attempted_at": 1.0,
+            "model_limits": {"fable": {"pct": 0, "resets_at": None, "fetched_at": "2026-09-04T04:09:22+00:00"}},
+        }))
+
+        assert _fetch_oauth_model_limits(tmp_path) is None
+
     def test_same_weekly_anchor(self) -> None:
         sun = datetime.fromisoformat(self.SUN).timestamp()
         assert _same_weekly_anchor(sun, sun - 0.075)  # scoped vs all entry jitter
