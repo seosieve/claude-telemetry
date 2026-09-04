@@ -69,7 +69,6 @@ cd claude-telemetry/dashboard
 npm install
 npx wrangler pages project create claude-telemetry
 npx wrangler pages secret put DATABASE_URL         # paste Neon connection string
-npx wrangler pages secret put CRON_SECRET          # random string for webhook cron auth
 npm run build
 npx wrangler pages deploy dist
 ```
