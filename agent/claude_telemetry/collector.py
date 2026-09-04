@@ -521,6 +521,12 @@ def _current_model_limits(cache: dict, now: float) -> dict | None:
     resets-08-23 Fable entry rode along on new rows for five days while the
     account was really at 65%. An entry past its own resets_at is therefore
     dropped rather than served — an empty column is honest, a stale one lies.
+
+    An entry with no resets_at at all is dropped for the same reason: a cache
+    written before 0.3.14 can hold the 0% / resets-null gauge of an account
+    whose weekly window had not opened (2026-09-04, see
+    _fetch_oauth_model_limits), and served across failures it would zero the
+    fleet gauge again.
     """
     limits = cache.get("model_limits")
     if not isinstance(limits, dict):
@@ -530,7 +536,7 @@ def _current_model_limits(cache: dict, now: float) -> dict | None:
         if not isinstance(entry, dict):
             continue
         resets = _parse_iso_utc(entry.get("resets_at"))
-        if resets is not None and resets <= now:
+        if resets is None or resets <= now:
             continue
         live[name] = entry
     return live or None
@@ -557,9 +563,21 @@ def _fetch_oauth_model_limits(
     feed reports (epoch seconds) — i.e. the account the rest of the row
     describes. A token whose usage response resets on a different anchor
     belongs to another account signed in on this machine, and is skipped
-    like a rejected one; when every readable token mismatches the fetch
-    fails (cached in-window reading kept, `last_error` says which account
-    each token is) rather than publish a gauge for the wrong account.
+    like a rejected one. So is a token whose response has no weekly window
+    at all: the statusline row describes an account with one, so an idle
+    account (no call this week — the API opens the window on first use) is
+    not it. On 2026-09-04 13:09 KST one machine's shared-account token had
+    expired overnight, the loop fell through to a side profile's live token,
+    its idle account had nothing to compare against the anchor, and its Fable
+    0% / resets_at null displaced the account's 90% on every dashboard for
+    two hours. When every readable token mismatches the fetch fails (cached
+    in-window reading kept, `last_error` says which account each token is)
+    rather than publish a gauge for the wrong account. Without a statusline
+    anchor the first accepted token still wins — there is nothing to judge by.
+
+    A scoped entry without a resets_at is never published either, whichever
+    token it came from: a gauge with no window is not a reading of this week.
+    An empty column is honest, and fills in with the next call on that model.
 
     Failures are recorded in the cache as `last_error` (shown by
     `cc-telemetry doctor`) and logged — a machine that silently never fetches
@@ -649,14 +667,13 @@ def _fetch_oauth_model_limits(
         if not isinstance(body, dict):
             return _fail("unexpected response shape")
         anchor = _account_weekly_reset(body)
-        if (
-            expected_weekly_reset is not None
-            and anchor is not None
-            and not _same_weekly_anchor(anchor, expected_weekly_reset)
+        if expected_weekly_reset is not None and (
+            anchor is None or not _same_weekly_anchor(anchor, expected_weekly_reset)
         ):
+            plan = cred.get('tier') or cred.get('subscription') or 'unknown plan'
             mismatched.append(
-                f"{cred['source']} is {cred.get('tier') or cred.get('subscription') or 'unknown plan'}"
-                f", weekly resets {_weekday_label(anchor)}"
+                f"{cred['source']} is {plan}, "
+                + ("no weekly window open" if anchor is None else f"weekly resets {_weekday_label(anchor)}")
             )
             continue
         data, token_source, token_tier = body, cred["source"], cred.get("tier")
@@ -681,6 +698,8 @@ def _fetch_oauth_model_limits(
         name = model.get("display_name")
         if not name or entry.get("percent") is None:
             continue
+        if _parse_iso_utc(entry.get("resets_at")) is None:
+            continue  # no window → not a reading of this week; leave the column empty
         scoped[str(name).lower()] = {
             "pct": entry.get("percent"),
             "resets_at": entry.get("resets_at"),
