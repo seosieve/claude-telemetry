@@ -4,6 +4,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Lets CI be run from the Actions tab without a push — the only way to
+  # check the suite on demand, e.g. after re-enabling Actions on this fork.
+  workflow_dispatch:
 
 jobs:
   agent-tests:
