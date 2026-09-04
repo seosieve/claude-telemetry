@@ -566,14 +566,18 @@ def _fetch_oauth_model_limits(
     like a rejected one. So is a token whose response has no weekly window
     at all: the statusline row describes an account with one, so an idle
     account (no call this week — the API opens the window on first use) is
-    not it. On 2026-09-04 13:09 KST one machine's shared-account token had
-    expired overnight, the loop fell through to a side profile's live token,
-    its idle account had nothing to compare against the anchor, and its Fable
-    0% / resets_at null displaced the account's 90% on every dashboard for
-    two hours. When every readable token mismatches the fetch fails (cached
-    in-window reading kept, `last_error` says which account each token is)
-    rather than publish a gauge for the wrong account. Without a statusline
-    anchor the first accepted token still wins — there is nothing to judge by.
+    not it. On 2026-09-04 13:09 KST one machine published Fable 0% /
+    resets_at null and displaced the account's 90% on every dashboard for two
+    hours; the likeliest reading of the logs is that its shared-account token
+    had expired overnight (this agent cannot refresh tokens), the loop fell
+    through to a side profile's live token, and that idle account had nothing
+    to compare against the anchor. When every readable token mismatches the
+    fetch fails (cached in-window reading kept, `last_error` says which
+    account each token is) rather than publish a gauge for the wrong account.
+    Should the shared account itself ever answer without a window (a fresh
+    week with no call yet), the column stays empty until the first call —
+    honest, and it fills in on its own. Without a statusline anchor the first
+    accepted token still wins — there is nothing to judge by.
 
     A scoped entry without a resets_at is never published either, whichever
     token it came from: a gauge with no window is not a reading of this week.

@@ -972,7 +972,12 @@ def doctor() -> None:
     else:
         reason = ml_cache.get("last_error") or "failed (reason not recorded — agent older than 0.3.8)"
         ml_hint = f"last success {_ago(ml_fetched)}, last attempt {_ago(ml_attempted)}: {reason}"
-        if "account mismatch" in reason:
+        if "no weekly window open" in reason:
+            ml_hint += (" — a readable token is on an account with no usage this week (an idle "
+                        "side profile) and none was accepted for the shared account; run `claude` "
+                        "here as the subscription account once so its token is refreshed, then "
+                        "re-run doctor")
+        elif "account mismatch" in reason:
             ml_hint += (" — every readable token belongs to a different account than the one "
                         f"Claude Code runs as here; sign into that account in `claude` under "
                         f"{claude_dir}, then re-run doctor")
