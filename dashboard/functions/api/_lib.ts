@@ -17,7 +17,6 @@ types.setTypeParser(1082, (v: string) => v); // DATE → keep "YYYY-MM-DD" (avoi
 
 export interface Env {
   DATABASE_URL: string;
-  CRON_SECRET?: string;
 }
 
 // Neon scale-to-zero: after ~5 min idle the compute suspends. The first query
