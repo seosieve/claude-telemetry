@@ -142,14 +142,24 @@ export function accountWeeklyPct(
  *   * entries are ranked by their own fetched_at (falling back to the row
  *     timestamp for pre-0.3.8 agents), not by row order, so a stale cache on a
  *     busy machine cannot outrank a fresher reading on an idle one;
- *   * an entry whose resets_at has passed is skipped rather than returned as
- *     0 — it describes the previous window, and another machine may well hold
- *     the current one. Only when every entry has expired is the answer 0 with
- *     no reset time: the window genuinely rolled over and no machine has read
- *     the new one yet (dropping the card would blank it until some agent
- *     syncs). 2026-08-23~28 is the case this guards: one machine re-sent a
- *     100% / resets-08-23 entry on fresh rows for five days, and the old
- *     newest-row-wins logic showed 0% while the account sat at 65%.
+ *   * an entry that does not describe the current window is skipped rather
+ *     than returned as 0, and another machine may well hold one that does.
+ *     Two kinds fail that test: an entry whose resets_at has passed (it
+ *     describes the previous window) and an entry with no resets_at at all
+ *     (it describes no window — the usage API only opens one on an account's
+ *     first call of the week, so agents before 0.3.14 could publish the 0%
+ *     of an account that had not called yet). Only when every entry fails is
+ *     the answer 0 with no reset time: nothing here has read the current
+ *     window, and dropping the card would blank it until some agent syncs.
+ *
+ * Both incidents this guards are the same shape — an entry that belongs to no
+ * live window arriving with a fetched_at fresh enough to outrank every real
+ * reading. 2026-08-23~28: one machine re-sent a 100% / resets-08-23 entry on
+ * fresh rows for five days and the account sat at 65%. 2026-09-04: one machine
+ * published 0% / resets_at null, read from an account that had made no call
+ * that week, and it displaced the shared account's 90% fleet-wide for 76
+ * minutes. The agent no longer sends either (0.3.14), but a machine that has
+ * not auto-upgraded still can, so the rule lives here too.
  *
  * `rows` should be one row per machine — the newest carrying model_limits
  * (see /api/rate-limits?model_limits=latest); a plain newest-N listing gets
@@ -162,15 +172,16 @@ export function accountModelLimit(
   if (!rows) return null;
   const now = Date.now();
   let best: { pct: number; resetsAtMs: number | null; readMs: number } | null = null;
-  let sawExpired = false;
+  let sawOutOfWindow = false;
   for (const raw of rows) {
     const r = raw as RateLimitRow;
     const entry = r.model_limits?.[model];
     const pct = entry?.pct;
     if (pct == null) continue;
-    const resetsAtMs = entry?.resets_at ? new Date(entry.resets_at).getTime() : null;
-    if (resetsAtMs != null && resetsAtMs <= now) {
-      sawExpired = true;
+    const resets = entry?.resets_at ? new Date(entry.resets_at).getTime() : NaN;
+    const resetsAtMs = Number.isFinite(resets) ? resets : null;
+    if (resetsAtMs == null || resetsAtMs <= now) {
+      sawOutOfWindow = true;
       continue;
     }
     const readRaw = entry?.fetched_at ?? r.timestamp;
@@ -179,5 +190,5 @@ export function accountModelLimit(
     if (!best || safeReadMs > best.readMs) best = { pct, resetsAtMs, readMs: safeReadMs };
   }
   if (best) return { pct: best.pct, resetsAtMs: best.resetsAtMs };
-  return sawExpired ? { pct: 0, resetsAtMs: null } : null;
+  return sawOutOfWindow ? { pct: 0, resetsAtMs: null } : null;
 }
