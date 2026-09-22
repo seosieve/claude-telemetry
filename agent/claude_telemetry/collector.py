@@ -140,6 +140,23 @@ def collect_daily_usage(since: str | None = None) -> list[DailyUsage]:
                     cost_usd=breakdown.get("cost", 0.0),
                 ))
 
+    # ccusage fetches model prices over the network unless --offline is given,
+    # so a machine that wakes up before its network does gets correct token
+    # counts priced at 0. Those rows still ship: the ingest endpoint refuses to
+    # let a 0 overwrite a real cost, and the next sync re-prices them. Dropping
+    # them here would be worse — a model ccusage genuinely has no price for
+    # would vanish from the dashboard, tokens and all. But say it out loud,
+    # because otherwise the only trace is a day that silently reads $0.00.
+    unpriced = [r for r in results if r.total_tokens > 0 and not r.cost_usd]
+    if unpriced:
+        shown = ", ".join(f"{r.date} {r.project}/{r.model}" for r in unpriced[:5])
+        logger.warning(
+            "daily usage: %d of %d rows have tokens but no cost — ccusage priced them "
+            "at 0, most likely a failed pricing fetch. Sending anyway; the server keeps "
+            "the stored cost and the next sync re-prices. %s%s",
+            len(unpriced), len(results), shown, "…" if len(unpriced) > 5 else "",
+        )
+
     return results
 
 

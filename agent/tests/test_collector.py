@@ -71,6 +71,37 @@ class TestCollectDailyUsage:
         assert "20260401" in call_args
 
     @patch("claude_telemetry.collector._run_command")
+    def test_keeps_unpriced_rows_but_warns(self, mock_run: MagicMock, caplog) -> None:
+        """A priced-at-0 row still ships — dropping it would hide the tokens too."""
+        mock_run.return_value = json.dumps({"projects": {"-Users-x-Documents-proj": [{
+            "date": "2026-09-21",
+            "modelBreakdowns": [
+                {"modelName": "claude-opus-5", "inputTokens": 1, "outputTokens": 2,
+                 "cacheCreationTokens": 3, "cacheReadTokens": 4, "cost": 0},
+                {"modelName": "claude-sonnet-5", "inputTokens": 1, "outputTokens": 1,
+                 "cacheCreationTokens": 0, "cacheReadTokens": 0, "cost": 1.5},
+            ],
+        }]}})
+
+        with caplog.at_level("WARNING", logger="claude-telemetry"):
+            records = collect_daily_usage()
+
+        assert len(records) == 2
+        unpriced = [r for r in records if r.model == "claude-opus-5"]
+        assert unpriced[0].total_tokens == 10 and unpriced[0].cost_usd == 0
+        assert "1 of 2 rows have tokens but no cost" in caplog.text
+        assert "proj/claude-opus-5" in caplog.text
+
+    @patch("claude_telemetry.collector._run_command")
+    def test_no_warning_when_everything_is_priced(self, mock_run: MagicMock, caplog) -> None:
+        mock_run.return_value = _load_fixture("daily_instances.json")
+
+        with caplog.at_level("WARNING", logger="claude-telemetry"):
+            collect_daily_usage()
+
+        assert "no cost" not in caplog.text
+
+    @patch("claude_telemetry.collector._run_command")
     def test_calculates_total_tokens(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _load_fixture("daily_instances.json")
 
