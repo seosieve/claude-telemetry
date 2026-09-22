@@ -81,7 +81,10 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
   let body: { kind?: string; rows?: unknown };
   try { body = await context.request.json(); } catch { return json({ error: "bad json" }, 400); }
   const kind = body.kind ?? "";
-  const spec = KINDS[kind];
+  // Own-property check: a plain lookup also finds Object.prototype members, so
+  // kind="constructor" used to sail past this guard and crash the worker on the
+  // first spec field it touched.
+  const spec = Object.prototype.hasOwnProperty.call(KINDS, kind) ? KINDS[kind] : undefined;
   if (!spec) return json({ error: `unknown kind: ${kind}` }, 400);
   if (!Array.isArray(body.rows)) return json({ error: "rows must be an array" }, 400);
   const rows = body.rows as Array<Record<string, unknown>>;
