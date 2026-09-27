@@ -18,7 +18,7 @@ from .config import CONFIG_DIR, DECOMMISSION_FLAG, load_config
 from .logging_config import get_rotating_handler
 
 LOCK_FILE = CONFIG_DIR / ".hook_lock"
-MIN_INTERVAL = 120  # seconds — minimum gap between hook syncs
+MIN_INTERVAL = 600  # seconds — longer than Neon's 5-min idle suspend so the compute can sleep between syncs
 
 
 def _setup_logging() -> logging.Logger:
