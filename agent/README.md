@@ -102,7 +102,7 @@ The agent does **not** parse JSONL files directly. It calls `ccusage` as the par
 4. Adds `machine_id` to all records
 5. POSTs to the dashboard ingest endpoint with incremental sync (the endpoint upserts into Neon)
 
-When **hooks** are configured, sync also triggers automatically on session end (with 2-minute debounce).
+When **hooks** are configured, sync also triggers automatically on session end (with 10-minute debounce, so Neon can suspend between syncs).
 
 ## Tests
 
